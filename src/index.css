@@ -1,0 +1,29 @@
+@import "tailwindcss";
+@import "./styles/design-system.css";
+
+@theme {
+  --color-pm-primary: #90846C;
+  --color-pm-primary-hover: #7D735D;
+  --color-pm-primary-light: #E9E6E1;
+  --color-pm-secondary: #7B7B6B;
+  --color-pm-secondary-hover: #69695B;
+  --color-pm-light: #F4F3F0;
+  --color-pm-light-alt: #EBEAE6;
+  --color-pm-dark: #090600;
+  --color-pm-dark-muted: #1F1B14;
+  
+  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
+  
+  --shadow-premium: 0 4px 6px -1px rgb(0 0 0 / 0.05), 0 2px 4px -2px rgb(0 0 0 / 0.05);
+  --shadow-premium-lg: 0 10px 15px -3px rgb(0 0 0 / 0.04), 0 4px 6px -4px rgb(0 0 0 / 0.04);
+}
+
+@layer base {
+  body {
+    background-color: var(--color-pm-light);
+    color: var(--color-pm-dark);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
