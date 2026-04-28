@@ -1,7 +1,7 @@
 import { useAuth, calculateFieldValue } from '../../../store/AuthContext';
 import { useSettings } from '../../../store/SettingsContext';
 import { getPublicUploadUrl } from '../../../utils/storageUrls';
-import { useMemo } from 'react';
+import { type ReactNode, useMemo } from 'react';
 
 interface ReportPdfRendererProps {
     selectedUnits: string[];
@@ -13,13 +13,33 @@ interface ReportPdfRendererProps {
 // ==================================================================================
 
 const SectionHeader = ({ title }: { title: string }) => (
-    <div className="bg-slate-100 border-l-4 border-slate-900 px-2 py-1 mb-2">
-        <h2 className="text-[9px] font-black text-slate-900 uppercase tracking-tight">{title}</h2>
+    <div className="report-section-header bg-slate-100 border-l-4 border-slate-900 px-3 py-2 mb-2">
+        <h2 className="text-[12px] font-black text-slate-900 uppercase tracking-tight">{title}</h2>
     </div>
 );
 
-const CompactTable = ({ headers, rows, colWidths }: { headers: string[]; rows: (any)[][]; colWidths?: string[] }) => (
-    <div className="mb-4 overflow-hidden border border-slate-200 rounded-lg">
+const getValueToneClass = (cell: ReactNode, columnIndex: number, rowLabel: ReactNode) => {
+    if (columnIndex === 0 || typeof cell !== 'string') return 'text-slate-800';
+    if (typeof rowLabel !== 'string') return 'text-slate-800';
+
+    const label = rowLabel.toLowerCase();
+    const shouldHighlightBalance = ['saldo', 'resultado', 'variação', 'variacao', 'diferença', 'diferenca', 'superávit', 'superavit', 'déficit', 'deficit']
+        .some(term => label.includes(term));
+    if (!shouldHighlightBalance) return 'text-slate-800';
+
+    const normalized = cell
+        .replace(/\./g, '')
+        .replace(',', '.')
+        .replace('%', '')
+        .trim();
+    const numericValue = Number(normalized);
+
+    if (!Number.isFinite(numericValue) || numericValue === 0) return 'text-slate-800';
+    return numericValue > 0 ? 'text-emerald-700' : 'text-red-700';
+};
+
+const CompactTable = ({ headers, rows, colWidths }: { headers: string[]; rows: ReactNode[][]; colWidths?: string[] }) => (
+    <div className="report-table mb-5 overflow-hidden border border-slate-300 rounded-lg">
         <table className="w-full text-left border-collapse bg-white table-fixed">
             <thead>
                 <tr className="bg-slate-900 text-white">
@@ -27,7 +47,7 @@ const CompactTable = ({ headers, rows, colWidths }: { headers: string[]; rows: (
                         <th 
                             key={i} 
                             style={colWidths ? { width: colWidths[i] } : {}}
-                            className="px-2 py-1 text-[7.5px] font-black uppercase tracking-widest border-r border-white/10 last:border-0"
+                            className="px-3 py-2 text-[10px] font-black uppercase tracking-wide border-r border-white/10 last:border-0"
                         >
                             {h}
                         </th>
@@ -36,9 +56,9 @@ const CompactTable = ({ headers, rows, colWidths }: { headers: string[]; rows: (
             </thead>
             <tbody className="divide-y divide-slate-100">
                 {rows.map((row, i) => (
-                    <tr key={i} className="hover:bg-slate-50 transition-colors">
+                    <tr key={i} className="report-table-row hover:bg-slate-50 transition-colors">
                         {row.map((cell, j) => (
-                            <td key={j} className={`px-2 py-1 text-[8.5px] font-bold text-slate-700 border-r border-slate-100 last:border-0 ${j === 0 ? 'bg-slate-50/20' : ''}`}>
+                            <td key={j} className={`px-3 py-2 text-[11px] font-bold border-r border-slate-100 last:border-0 ${j === 0 ? 'bg-slate-50/40 text-slate-900' : getValueToneClass(cell, j, row[0])}`}>
                                 {cell}
                             </td>
                         ))}
@@ -83,17 +103,17 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups }: Rep
                 <div className="flex justify-between items-center border-b-2 border-slate-900 pb-2 mb-6">
                     <div className="flex items-center gap-4">
                         {logoUrl && (
-                            <img src={logoUrl} alt="Logo" className="w-12 h-12 object-contain" />
+                            <img src={logoUrl} alt="Logo" className="w-14 h-14 object-contain" />
                         )}
                         <div className="flex flex-col">
-                            <span className="text-[7.5px] font-black tracking-widest text-slate-400 uppercase leading-none mb-1">PMBA — COMANDO GERAL</span>
-                            <h1 className="text-lg font-black text-slate-900 tracking-tight uppercase leading-none">Briefing Estratégico Diário</h1>
-                            <p className="text-[7.5px] font-bold text-slate-500 uppercase tracking-widest mt-1">DCS / GABINETE DE GESTÃO</p>
+                            <span className="text-[10px] font-black tracking-widest text-slate-500 uppercase leading-none mb-1">PMBA — COMANDO GERAL</span>
+                            <h1 className="text-2xl font-black text-slate-900 tracking-tight uppercase leading-none">Briefing Estratégico Diário</h1>
+                            <p className="text-[10px] font-bold text-slate-600 uppercase tracking-widest mt-2">DCS / GABINETE DE GESTÃO</p>
                         </div>
                     </div>
                     <div className="text-right">
-                        <span className="block text-base font-black text-slate-900">{executiveSummary.date}</span>
-                        <span className="block text-[7.5px] font-bold text-slate-500 uppercase tracking-widest">RELATÓRIO DE COMANDO</span>
+                        <span className="block text-xl font-black text-slate-900">{executiveSummary.date}</span>
+                        <span className="block text-[10px] font-bold text-slate-500 uppercase tracking-widest">RELATÓRIO DE COMANDO</span>
                     </div>
                 </div>
 
@@ -115,14 +135,14 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups }: Rep
                     <SectionHeader title="UNIDADES INCLUÍDAS NO BRIEFING" />
                     <div className="grid grid-cols-4 gap-1">
                         {unitsToRender.map(unit => (
-                            <div key={unit.id} className="text-[8px] font-bold text-slate-600 bg-slate-50 p-1 rounded border border-slate-200">
+                            <div key={unit.id} className="text-[10px] font-bold text-slate-700 bg-slate-50 p-2 rounded border border-slate-200">
                                 {unit.name}
                             </div>
                         ))}
                     </div>
                 </div>
 
-                <div className="mt-auto pt-4 border-t border-slate-100 text-[8px] text-slate-400 font-bold uppercase tracking-[0.2em] italic">
+                <div className="mt-auto pt-4 border-t border-slate-100 text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em] italic">
                     CONFIDENCIAL — USO EXCLUSIVO
                 </div>
             </div>
@@ -136,12 +156,12 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups }: Rep
                     const unitEntries = entries.filter(e => e.unitId === unit.id);
 
                     return (
-                        <div key={unit.id} className="unit-section mb-6 break-after-page-avoid">
+                        <div key={unit.id} className="unit-section report-block mb-8 break-after-page-avoid">
                             <div className="flex justify-between items-end border-b-[2px] border-slate-900 pb-1 mb-4">
-                                <h2 className="text-[11px] font-black text-slate-900 uppercase tracking-tighter">
-                                    {unit.name} <span className="text-slate-400 text-[8px] ml-1">— {unit.full_name || 'COMANDO GERAL'}</span>
+                                <h2 className="text-[15px] font-black text-slate-900 uppercase tracking-tight">
+                                    {unit.name} <span className="text-slate-500 text-[11px] ml-1">— {unit.full_name || 'COMANDO GERAL'}</span>
                                 </h2>
-                                <span className="text-[7.5px] font-black text-slate-300 italic">PÁGINA DETALHADA</span>
+                                <span className="text-[10px] font-black text-slate-400 italic">PÁGINA DETALHADA</span>
                             </div>
 
                             <div className="space-y-4">
@@ -153,7 +173,7 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups }: Rep
                                         if (itemsToRender.length === 0) return null;
 
                                         return (
-                                            <div key={group.id} className="break-inside-avoid">
+                                            <div key={group.id} className="report-block break-inside-avoid">
                                                 <SectionHeader title={group.title} />
                                                 <CompactTable 
                                                     headers={['Tópico / Ocorrência', 'Descrição Narrativa', 'Sinc.']}
@@ -196,7 +216,7 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups }: Rep
                                         };
 
                                         return (
-                                            <div key={group.id} className="break-inside-avoid">
+                                            <div key={group.id} className="report-block break-inside-avoid">
                                                 <SectionHeader title={group.title} />
                                                 <CompactTable 
                                                     headers={['Indicador / Métrica', 'Valor']}
@@ -225,7 +245,17 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups }: Rep
                         print-color-adjust: exact !important; 
                     }
                     .page-break-after-always { page-break-after: always; break-after: page; }
-                    .break-inside-avoid { break-inside: avoid; page-break-inside: avoid; }
+                    .break-inside-avoid,
+                    .report-block,
+                    .report-section-header,
+                    .report-table,
+                    .report-table-row {
+                        break-inside: avoid;
+                        page-break-inside: avoid;
+                    }
+                    thead { display: table-header-group; }
+                    tfoot { display: table-footer-group; }
+                    tr, td, th { page-break-inside: avoid; break-inside: avoid; }
                 }
 
                 * {
@@ -234,7 +264,7 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups }: Rep
                 }
 
                 td {
-                    line-height: 1.25;
+                    line-height: 1.35;
                     word-break: break-word;
                 }
             `}</style>
