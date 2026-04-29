@@ -8,6 +8,9 @@ interface ReportPdfRendererProps {
     selectedGroups: string[];
 }
 
+type TableRow = ReactNode[] | { type: 'section'; label: string };
+type RawMetricRow = TableRow | { type: 'yearly'; label: string; valuesByYear: Record<string, ReactNode> };
+
 // ==================================================================================
 // COMPONENTES AUXILIARES PARA RELATÓRIO EXECUTIVO (COMPACTOS)
 // ==================================================================================
@@ -17,6 +20,50 @@ const SectionHeader = ({ title }: { title: string }) => (
         <h2 className="text-[12px] font-black text-slate-900 uppercase tracking-tight">{title}</h2>
     </div>
 );
+
+const SummaryCard = ({ label, value, tone = 'slate' }: { label: string; value: string; tone?: 'slate' | 'blue' | 'emerald' | 'amber' }) => {
+    const toneClass = {
+        slate: 'border-slate-300 bg-slate-50 text-slate-900',
+        blue: 'border-blue-200 bg-blue-50 text-blue-900',
+        emerald: 'border-emerald-200 bg-emerald-50 text-emerald-900',
+        amber: 'border-amber-200 bg-amber-50 text-amber-900'
+    }[tone];
+
+    return (
+        <div className={`report-summary-card border rounded-lg p-4 ${toneClass}`}>
+            <span className="block text-[10px] font-black uppercase tracking-wide opacity-70">{label}</span>
+            <strong className="block text-3xl font-black leading-tight mt-1">{value}</strong>
+        </div>
+    );
+};
+
+const parseDisplayNumber = (value: ReactNode) => {
+    if (typeof value !== 'string') return null;
+    const numericValue = Number(value.replace(/\./g, '').replace(',', '.').replace('%', '').trim());
+    return Number.isFinite(numericValue) ? numericValue : null;
+};
+
+const MetricValue = ({ value, label }: { value: ReactNode; label: ReactNode }) => {
+    const numericValue = parseDisplayNumber(value);
+    const isPercentage = typeof value === 'string' && value.includes('%');
+    const toneClass = getValueToneClass(value, 1, label);
+    const barWidth = numericValue === null ? 0 : Math.min(Math.abs(numericValue), 100);
+
+    if (numericValue === null || value === '-') {
+        return <span className="report-value-neutral">{value}</span>;
+    }
+
+    return (
+        <span className={`report-value-pill ${toneClass}`}>
+            <span className="report-value-number">{value}</span>
+            {isPercentage && (
+                <span className="report-value-bar" aria-hidden="true">
+                    <span style={{ width: `${barWidth}%` }} />
+                </span>
+            )}
+        </span>
+    );
+};
 
 const getValueToneClass = (cell: ReactNode, columnIndex: number, rowLabel: ReactNode) => {
     if (columnIndex === 0 || typeof cell !== 'string') return 'text-slate-800';
@@ -38,9 +85,36 @@ const getValueToneClass = (cell: ReactNode, columnIndex: number, rowLabel: React
     return numericValue > 0 ? 'text-emerald-700' : 'text-red-700';
 };
 
-const CompactTable = ({ headers, rows, colWidths }: { headers: string[]; rows: ReactNode[][]; colWidths?: string[] }) => (
+const isDateOrPeriodField = (fieldName: string) => {
+    const normalized = fieldName
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+
+    return ['data', 'periodo', 'prazo', 'inicio', 'fim', 'vigencia', 'competencia', 'mes', 'ano']
+        .some(term => normalized.includes(term));
+};
+
+const getYearMetricInfo = (fieldName: string) => {
+    const yearMatch = fieldName.match(/\b(19|20)\d{2}\b/);
+    if (!yearMatch) return null;
+
+    const year = yearMatch[0];
+    const baseName = fieldName
+        .replace(new RegExp(`\\b${year}\\b`), '')
+        .replace(/[()\-–—:|/]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+
+    return {
+        year,
+        baseName: baseName || fieldName
+    };
+};
+
+const CompactTable = ({ headers, rows, colWidths, variant = 'default' }: { headers: string[]; rows: TableRow[]; colWidths?: string[]; variant?: 'default' | 'metrics' | 'collection' }) => (
     <div className="report-table mb-5 overflow-hidden border border-slate-300 rounded-lg">
-        <table className="w-full text-left border-collapse bg-white table-fixed">
+        <table className={`w-full text-left border-collapse bg-white table-fixed report-table-${variant}`}>
             <thead>
                 <tr className="bg-slate-900 text-white">
                     {headers.map((h, i) => (
@@ -55,15 +129,27 @@ const CompactTable = ({ headers, rows, colWidths }: { headers: string[]; rows: R
                 </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-                {rows.map((row, i) => (
-                    <tr key={i} className="report-table-row hover:bg-slate-50 transition-colors">
-                        {row.map((cell, j) => (
-                            <td key={j} className={`px-3 py-2 text-[11px] font-bold border-r border-slate-100 last:border-0 ${j === 0 ? 'bg-slate-50/40 text-slate-900' : getValueToneClass(cell, j, row[0])}`}>
-                                {cell}
-                            </td>
-                        ))}
-                    </tr>
-                ))}
+                {rows.map((row, i) => {
+                    if (!Array.isArray(row)) {
+                        return (
+                            <tr key={i} className="report-table-row report-group-row">
+                                <td colSpan={headers.length} className="px-3 py-2 text-[11px] font-black uppercase tracking-wide text-slate-900 bg-slate-200 border-t border-slate-300">
+                                    {row.label}
+                                </td>
+                            </tr>
+                        );
+                    }
+
+                    return (
+                        <tr key={i} className="report-table-row hover:bg-slate-50 transition-colors">
+                            {row.map((cell, j) => (
+                                <td key={j} className={`px-3 py-2 text-[11px] font-bold border-r border-slate-100 last:border-0 ${j === 0 ? 'bg-slate-50/40 text-slate-900' : getValueToneClass(cell, j, row[0])}`}>
+                                    {cell}
+                                </td>
+                            ))}
+                        </tr>
+                    );
+                })}
             </tbody>
         </table>
     </div>
@@ -119,16 +205,15 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups }: Rep
 
                 <div className="mb-6">
                     <SectionHeader title="DADOS CONSOLIDADOS" />
-                    <CompactTable 
-                        headers={['Item Estratégico', 'Valor']}
-                        rows={[
-                            ['Comandos Reportados', `${executiveSummary.unitsCount} unidades`],
-                            ['Registros Operacionais', `${executiveSummary.totalRegistros} itens`],
-                            ['Ocorrências Narradas', `${executiveSummary.totalOcorrencias} descrições`],
-                            ['Data de Emissão', `${executiveSummary.date} — ${executiveSummary.time}`]
-                        ]}
-                        colWidths={['70%', '30%']}
-                    />
+                    <div className="grid grid-cols-3 gap-3 mb-3">
+                        <SummaryCard label="Comandos" value={`${executiveSummary.unitsCount}`} tone="blue" />
+                        <SummaryCard label="Registros" value={`${executiveSummary.totalRegistros}`} tone="emerald" />
+                        <SummaryCard label="Ocorrências" value={`${executiveSummary.totalOcorrencias}`} tone="amber" />
+                    </div>
+                    <div className="report-emission-box">
+                        <span>Documento gerado em</span>
+                        <strong>{executiveSummary.date} às {executiveSummary.time}</strong>
+                    </div>
                 </div>
 
                 <div>
@@ -154,6 +239,104 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups }: Rep
                     if (groupsForUnit.length === 0) return null;
 
                     const unitEntries = entries.filter(e => e.unitId === unit.id);
+                    const metricGroupsForUnit = groupsForUnit.filter(group => group.mode !== 'collection');
+                    const collectionGroupsForUnit = groupsForUnit.filter(group => group.mode === 'collection');
+
+                    const getVal = (field: any, snapshotValues: any[]) => {
+                        const fv = snapshotValues.find(v => v.fieldId === field.id);
+                        let val = fv ? fv.value : null;
+                        if ((val === null || val === undefined || val === '') && field.type === 'calculated') {
+                            const allValues = snapshotValues.reduce((acc, curr) => {
+                                acc[curr.fieldId] = curr.value;
+                                return acc;
+                            }, {} as Record<string, any>);
+                            const calculated = calculateFieldValue(field, allValues, fields);
+                            if (calculated !== null) val = calculated;
+                        }
+                        if (val === null || val === undefined || val === '') return '-';
+                        if (field.type === 'percentage') return `${Number(val).toLocaleString('pt-BR')}%`;
+                        if (field.type === 'number' || field.type === 'calculated') return Number(val).toLocaleString('pt-BR');
+                        return val;
+                    };
+
+                    const metricData = metricGroupsForUnit.reduce<{ years: string[]; rows: RawMetricRow[] }>((acc, group) => {
+                        const groupFields = fields.filter(f => f.dataGroupId === group.id && f.isActive && f.type !== 'image').sort((a, b) => a.order - b.order);
+                        if (groupFields.length === 0) return acc;
+
+                        const groupEntry = unitEntries.find(e => e.dataGroupId === group.id);
+                        const snapshotValues = groupEntry ? getValuesForEntry(groupEntry.id) : [];
+                        const yearlyGroups = new Map<string, { label: string; valuesByYear: Record<string, ReactNode>; order: number }>();
+                        const regularRows: { order: number; row: ReactNode[] }[] = [];
+
+                        groupFields.forEach((field, index) => {
+                            const value = getVal(field, snapshotValues);
+                            const yearInfo = getYearMetricInfo(field.name);
+
+                            if (!yearInfo) {
+                                regularRows.push({ order: index, row: [field.name, value] });
+                                return;
+                            }
+
+                            if (!acc.years.includes(yearInfo.year)) {
+                                acc.years.push(yearInfo.year);
+                            }
+
+                            const current = yearlyGroups.get(yearInfo.baseName) ?? {
+                                label: yearInfo.baseName,
+                                valuesByYear: {},
+                                order: index
+                            };
+                            current.valuesByYear[yearInfo.year] = value;
+                            current.order = Math.min(current.order, index);
+                            yearlyGroups.set(yearInfo.baseName, current);
+                        });
+
+                        const groupRows = [
+                            ...regularRows,
+                            ...Array.from(yearlyGroups.values()).map(item => ({
+                                order: item.order,
+                                row: { type: 'yearly', label: item.label, valuesByYear: item.valuesByYear } as RawMetricRow
+                            }))
+                        ].sort((a, b) => a.order - b.order);
+
+                        if (groupRows.length === 0) return acc;
+
+                        acc.rows.push(
+                            { type: 'section', label: group.title },
+                            ...groupRows.map(item => item.row)
+                        );
+
+                        return acc;
+                    }, { years: [], rows: [] });
+
+                    const metricYears = [...metricData.years].sort();
+                    const metricHeaders = metricYears.length > 0
+                        ? ['Indicador / Métrica', ...metricYears, 'Valor']
+                        : ['Indicador / Métrica', 'Valor'];
+                    const metricRows = metricYears.length > 0
+                        ? metricData.rows.map<TableRow>(row => {
+                            if (!Array.isArray(row)) {
+                                if (row.type === 'yearly') {
+                                    return [
+                                        row.label,
+                                        ...metricYears.map(year => <MetricValue key={`${row.label}-${year}`} value={row.valuesByYear[year] ?? '-'} label={row.label} />),
+                                        '-'
+                                    ];
+                                }
+                                return row;
+                            }
+
+                            return [row[0], ...metricYears.map(() => '-'), <MetricValue key={`${String(row[0])}-value`} value={row[1] ?? '-'} label={row[0]} />];
+                        })
+                        : metricData.rows
+                            .filter((row): row is TableRow => Array.isArray(row) || row.type === 'section')
+                            .map<TableRow>(row => Array.isArray(row) ? [row[0], <MetricValue key={`${String(row[0])}-value`} value={row[1] ?? '-'} label={row[0]} />] : row);
+                    const metricColWidths = metricHeaders.map((_, index) => {
+                        if (index === 0) return metricYears.length > 0 ? '30%' : '34%';
+                        if (metricYears.length === 0) return '66%';
+                        if (index === metricHeaders.length - 1) return '22%';
+                        return `${Math.floor(48 / metricYears.length)}%`;
+                    });
 
                     return (
                         <div key={unit.id} className="unit-section report-block mb-8 break-after-page-avoid">
@@ -165,8 +348,18 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups }: Rep
                             </div>
 
                             <div className="space-y-4">
-                                {groupsForUnit.map(group => {
-                                    if (group.mode === 'collection') {
+                                {metricRows.length > 0 && (
+                                    <div className="report-block break-inside-avoid">
+                                        <CompactTable
+                                            headers={metricHeaders}
+                                            rows={metricRows}
+                                            colWidths={metricColWidths}
+                                            variant="metrics"
+                                        />
+                                    </div>
+                                )}
+
+                                {collectionGroupsForUnit.map(group => {
                                         const unitCollections = collectionItems.filter(i => i.unitId === unit.id && i.dataGroupId === group.id && i.status !== 'archived');
                                         const itemsToRender = [...unitCollections].sort((a, b) => (b.isFeatured ? 1 : 0) - (a.isFeatured ? 1 : 0) || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
@@ -176,56 +369,38 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups }: Rep
                                             <div key={group.id} className="report-block break-inside-avoid">
                                                 <SectionHeader title={group.title} />
                                                 <CompactTable 
-                                                    headers={['Tópico / Ocorrência', 'Descrição Narrativa', 'Sinc.']}
+                                                    headers={['Tópico / Ocorrência', 'Data / Período', 'Descrição Narrativa', 'Sinc.']}
                                                     rows={itemsToRender.map(item => {
                                                         const itemValues = getValuesForItem(item.id);
-                                                        const txtFields = itemValues.filter((fv: any) => fields.find(f => f.id === fv.fieldId)?.type === 'text');
+                                                        const textValues = itemValues.filter((fv: any) => fields.find(f => f.id === fv.fieldId)?.type === 'text');
+                                                        const datePeriodValues = textValues.filter((fv: any) => {
+                                                            const field = fields.find(f => f.id === fv.fieldId);
+                                                            return field ? isDateOrPeriodField(field.name) : false;
+                                                        });
+                                                        const titleValues = textValues.filter((fv: any) => {
+                                                            const field = fields.find(f => f.id === fv.fieldId);
+                                                            return field ? !isDateOrPeriodField(field.name) : true;
+                                                        });
                                                         const descFields = itemValues.filter((fv: any) => fields.find(f => f.id === fv.fieldId)?.type === 'textarea');
+                                                        const datePeriodLabel = datePeriodValues
+                                                            .map((fv: any) => {
+                                                                const field = fields.find(f => f.id === fv.fieldId);
+                                                                return field?.name ? `${field.name}: ${fv.valueText}` : fv.valueText;
+                                                            })
+                                                            .filter(Boolean)
+                                                            .join(' | ');
                                                         return [
-                                                            txtFields[0]?.valueText?.toUpperCase() || 'REGISTRO',
+                                                            titleValues[0]?.valueText?.toUpperCase() || 'REGISTRO',
+                                                            datePeriodLabel || '-',
                                                             descFields[0]?.valueText || 'Sem descrição.',
                                                             new Date(item.updatedAt).toLocaleDateString('pt-BR', {day: '2-digit', month: '2-digit'})
                                                         ];
                                                     })}
-                                                    colWidths={['20%', '70%', '10%']}
+                                                    colWidths={['20%', '22%', '48%', '10%']}
+                                                    variant="collection"
                                                 />
                                             </div>
                                         );
-                                    } else {
-                                        const groupFields = fields.filter(f => f.dataGroupId === group.id && f.isActive).sort((a, b) => a.order - b.order);
-                                        if (groupFields.length === 0) return null;
-
-                                        const groupEntry = unitEntries.find(e => e.dataGroupId === group.id);
-                                        const snapshotValues = groupEntry ? getValuesForEntry(groupEntry.id) : [];
-
-                                        const getVal = (field: any) => {
-                                            const fv = snapshotValues.find(v => v.fieldId === field.id);
-                                            let val = fv ? fv.value : null;
-                                            if ((val === null || val === undefined || val === '') && field.type === 'calculated') {
-                                                const allValues = snapshotValues.reduce((acc, curr) => {
-                                                    acc[curr.fieldId] = curr.value;
-                                                    return acc;
-                                                }, {} as Record<string, any>);
-                                                const calculated = calculateFieldValue(field, allValues, fields);
-                                                if (calculated !== null) val = calculated;
-                                            }
-                                            if (val === null || val === undefined || val === '') return '-';
-                                            if (field.type === 'percentage') return `${Number(val).toLocaleString('pt-BR')}%`;
-                                            if (field.type === 'number' || field.type === 'calculated') return Number(val).toLocaleString('pt-BR');
-                                            return val;
-                                        };
-
-                                        return (
-                                            <div key={group.id} className="report-block break-inside-avoid">
-                                                <SectionHeader title={group.title} />
-                                                <CompactTable 
-                                                    headers={['Indicador / Métrica', 'Valor']}
-                                                    rows={groupFields.filter(f => f.type !== 'image').map(f => [f.name, getVal(f)])}
-                                                    colWidths={['80%', '20%']}
-                                                />
-                                            </div>
-                                        );
-                                    }
                                 })}
                             </div>
                         </div>
@@ -256,6 +431,128 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups }: Rep
                     thead { display: table-header-group; }
                     tfoot { display: table-footer-group; }
                     tr, td, th { page-break-inside: avoid; break-inside: avoid; }
+                }
+
+                .report-table-metrics th {
+                    font-size: 12px;
+                    padding-top: 10px;
+                    padding-bottom: 10px;
+                }
+
+                .report-table-metrics td {
+                    font-size: 12px;
+                    vertical-align: top;
+                }
+
+                .report-table-metrics td:first-child {
+                    width: 34%;
+                    white-space: normal;
+                }
+
+                .report-table-metrics td:nth-child(2) {
+                    font-size: 13px;
+                    line-height: 1.4;
+                }
+
+                .report-table-metrics th:not(:first-child),
+                .report-table-metrics td:not(:first-child) {
+                    text-align: center;
+                }
+
+                .report-table-metrics td:last-child {
+                    font-size: 13px;
+                    line-height: 1.4;
+                    color: #0f172a;
+                }
+
+                .report-table-collection td {
+                    vertical-align: top;
+                }
+
+                .report-table-collection td:nth-child(2) {
+                    font-size: 11.5px;
+                    line-height: 1.35;
+                    color: #334155;
+                    background: #f8fafc;
+                }
+
+                .report-summary-card {
+                    min-height: 86px;
+                    break-inside: avoid;
+                    page-break-inside: avoid;
+                }
+
+                .report-emission-box {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                    border: 1px solid #cbd5e1;
+                    background: #f8fafc;
+                    border-radius: 8px;
+                    padding: 10px 12px;
+                    color: #334155;
+                    font-size: 11px;
+                    font-weight: 800;
+                    text-transform: uppercase;
+                    letter-spacing: 0.04em;
+                }
+
+                .report-emission-box strong {
+                    color: #0f172a;
+                    font-size: 12px;
+                }
+
+                .report-value-pill {
+                    display: inline-flex;
+                    flex-direction: column;
+                    align-items: stretch;
+                    justify-content: center;
+                    min-width: 72px;
+                    max-width: 100%;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 999px;
+                    padding: 4px 9px;
+                    background: #f8fafc;
+                    color: #0f172a;
+                    font-weight: 900;
+                }
+
+                .report-value-pill.text-emerald-700 {
+                    border-color: #86efac;
+                    background: #f0fdf4;
+                    color: #047857;
+                }
+
+                .report-value-pill.text-red-700 {
+                    border-color: #fecaca;
+                    background: #fef2f2;
+                    color: #b91c1c;
+                }
+
+                .report-value-number {
+                    line-height: 1.1;
+                }
+
+                .report-value-bar {
+                    display: block;
+                    width: 100%;
+                    height: 4px;
+                    margin-top: 4px;
+                    border-radius: 999px;
+                    background: #e2e8f0;
+                    overflow: hidden;
+                }
+
+                .report-value-bar span {
+                    display: block;
+                    height: 100%;
+                    border-radius: inherit;
+                    background: currentColor;
+                }
+
+                .report-value-neutral {
+                    color: #334155;
+                    font-weight: 800;
                 }
 
                 * {
