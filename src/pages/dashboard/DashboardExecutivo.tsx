@@ -1,13 +1,12 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useAuth, calculateFieldValue } from '../../store/AuthContext';
-import { 
+import {
     Clock, ShieldAlert, FileText, Activity, ChevronDown, Check,
     Database, Shield, ShieldCheck, Camera, Video, FileSearch,
     ClipboardList, FileCheck, AlertCircle, BadgeAlert, Plane, Helicopter, Users, UserRound,
     HeartPulse, Stethoscope, Award, BadgeCheck, School, Building2, BookOpen, HeartHandshake,
     Brain, MessagesSquare, CarFront, Truck, Siren, Radio, Map, MapPinned, Target, Crosshair,
-    Briefcase, CalendarCheck, NotebookPen, Bell, ClipboardPlus, Package,
-    TriangleAlert, Info, CheckCircle2
+    Briefcase, CalendarCheck, NotebookPen, Bell, ClipboardPlus, Package
 } from 'lucide-react';
 import ReportBuilderModal from './components/ReportBuilderModal';
 import { getPublicUploadUrl } from '../../utils/storageUrls';
@@ -73,11 +72,12 @@ const ImageRenderer = ({ path, alt }: { path: string, alt: string }) => {
 };
 
 export default function DashboardExecutivo() {
-    const { units, dataGroups, fields, users, entries, getValuesForEntry, user, collectionItems, getValuesForItem, notifications } = useAuth();
+    const { units, dataGroups, fields, users, entries, getValuesForEntry, user, collectionItems, getValuesForItem } = useAuth();
     const [selectedUnitIds, setSelectedUnitIds] = useState<string[]>([]);
     const [isInitialized, setIsInitialized] = useState(false);
     const [isDropdownOpen, setIsDropdownOpen] = useState(false);
     const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+    const [unitFilterSearch, setUnitFilterSearch] = useState('');
 
     useEffect(() => {
         if (!isInitialized && units.length > 0) {
@@ -106,6 +106,13 @@ export default function DashboardExecutivo() {
     const handleClearAll = () => {
         setSelectedUnitIds([]);
     };
+
+    const filteredFilterUnits = useMemo(() => {
+        const search = unitFilterSearch.trim().toLowerCase();
+        if (!search) return units;
+
+        return units.filter(unit => `${unit.name} ${unit.full_name || ''}`.toLowerCase().includes(search));
+    }, [units, unitFilterSearch]);
 
     // LÓGICA 1 (NOVA): Hierarquia de Snapshots via DataGroupEntries
     const hierarchicalView = useMemo(() => {
@@ -324,41 +331,103 @@ export default function DashboardExecutivo() {
         };
     }, [selectedUnitIds, entries, collectionItems]);
 
-    // LÓGICA 3: Filtrar comunicados ativos para o usuário
-    const activeNotifications = useMemo(() => {
-        return notifications.filter(n => 
-            n.isActive && 
-            (n.target_role === 'all' || n.target_role === user?.role)
-        );
-    }, [notifications, user]);
-
     return (
         <div className="space-y-10">
-            {/* Comunicados do Sistema (se houver) */}
-            {activeNotifications.length > 0 && (
-                <div className="space-y-3 animate-in fade-in slide-in-from-top-4 duration-500">
-                    {activeNotifications.map(n => {
-                        const Icon = n.type === 'warning' ? TriangleAlert : (n.type === 'error' ? AlertCircle : (n.type === 'success' ? CheckCircle2 : Info));
-                        const btnColor = n.type === 'warning' ? 'bg-amber-100/50 text-amber-700' : (n.type === 'error' ? 'bg-red-100/50 text-red-700' : (n.type === 'success' ? 'bg-green-100/50 text-green-700' : 'bg-blue-100/50 text-blue-700'));
-                        const bgColor = n.type === 'warning' ? 'bg-amber-50/50 border-amber-200/50' : (n.type === 'error' ? 'bg-red-50/50 border-red-200/50' : (n.type === 'success' ? 'bg-green-50/50 border-green-200/50' : 'bg-blue-50/50 border-blue-200/50'));
-                        
-                        return (
-                            <div key={n.id} className={`flex items-start gap-4 p-4 rounded-2xl border ${bgColor} shadow-sm backdrop-blur-sm group`}>
-                                <div className={`w-10 h-10 rounded-xl ${btnColor} flex items-center justify-center flex-shrink-0`}>
-                                    <Icon className="w-5 h-5" />
+            {/* Filtro e impressão */}
+            <div className="bg-white p-5 rounded-2xl shadow-premium border border-pm-secondary/15 flex flex-wrap gap-4 items-center justify-between">
+                <div className="flex gap-3 flex-wrap items-center">
+                    <div className="flex flex-col">
+                        <span className="text-xs font-black text-pm-secondary/60 uppercase tracking-[0.15em]">Filtro de Comando</span>
+                        <span className="text-[11px] font-bold text-pm-secondary/70">
+                            {selectedUnitIds.length === units.length ? 'Todas as unidades visíveis' : `${selectedUnitIds.length} de ${units.length} unidade(s)`}
+                        </span>
+                    </div>
+                    <div className="relative">
+                        <button
+                            onClick={() => user?.role !== 'editor' && setIsDropdownOpen(!isDropdownOpen)}
+                            className={`bg-pm-light/50 border border-pm-secondary/20 text-sm font-bold rounded-xl px-5 py-2.5 text-pm-dark flex items-center gap-3 outline-none transition-all min-w-[240px] justify-between ${user?.role === 'editor' ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-white hover:border-pm-primary/40 hover:shadow-sm'}`}
+                        >
+                            <span className="max-w-[210px] truncate text-left">
+                                {selectedUnitIds.length === units.length ? 'Todas as Unidades' : `${selectedUnitIds.length} Unidade(s) selecionada(s)`}
+                            </span>
+                            {user?.role !== 'editor' && <ChevronDown className={`w-4 h-4 text-pm-primary transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`} />}
+                        </button>
+
+                        {isDropdownOpen && user?.role !== 'editor' && (
+                            <>
+                                <div className="fixed inset-0 z-10" onClick={() => setIsDropdownOpen(false)}></div>
+                                <div className="absolute top-full left-0 mt-2 w-[360px] bg-white border border-pm-secondary/20 shadow-xl rounded-xl z-20 flex flex-col overflow-hidden">
+                                    <div className="p-3 border-b border-pm-secondary/10 space-y-3">
+                                        <div className="relative">
+                                            <FileSearch className="w-4 h-4 text-pm-secondary absolute left-3 top-1/2 -translate-y-1/2" />
+                                            <input
+                                                value={unitFilterSearch}
+                                                onChange={e => setUnitFilterSearch(e.target.value)}
+                                                placeholder="Buscar unidade"
+                                                className="w-full bg-pm-light/50 border border-pm-secondary/15 rounded-lg pl-9 pr-3 py-2 text-sm font-bold text-pm-dark outline-none focus:ring-2 focus:ring-pm-primary/20"
+                                            />
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button onClick={handleSelectAll} className="flex-1 text-xs font-black bg-pm-light text-pm-dark py-2 rounded-lg hover:bg-pm-secondary/20 transition-colors">Selecionar Todas</button>
+                                            <button onClick={handleClearAll} className="flex-1 text-xs font-black bg-red-50 text-red-600 py-2 rounded-lg hover:bg-red-100 transition-colors">Limpar</button>
+                                        </div>
+                                    </div>
+                                    <div className="max-h-64 overflow-y-auto w-full p-2 flex flex-col gap-1">
+                                        {filteredFilterUnits.length === 0 && (
+                                            <div className="py-8 text-center text-sm font-bold text-pm-secondary">
+                                                Nenhuma unidade encontrada.
+                                            </div>
+                                        )}
+                                        {filteredFilterUnits.map(u => {
+                                            const isSelected = selectedUnitIds.includes(u.id);
+                                            return (
+                                                <div
+                                                    key={u.id}
+                                                    onClick={(e) => { e.stopPropagation(); handleToggleUnit(u.id); }}
+                                                    className={`flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors ${isSelected ? 'bg-pm-primary/10 hover:bg-pm-primary/20' : 'hover:bg-pm-light'}`}
+                                                >
+                                                    <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${isSelected ? 'bg-pm-primary border-pm-primary text-white' : 'border-pm-secondary/40'}`}>
+                                                        {isSelected && <Check className="w-3 h-3" />}
+                                                    </div>
+                                                    <div className="flex flex-col truncate">
+                                                        <span className="text-sm text-pm-dark truncate">{u.name}</span>
+                                                        {u.full_name && <span className="text-[10px] text-pm-secondary truncate uppercase">{u.full_name}</span>}
+                                                    </div>
+                                                </div>
+                                            )
+                                        })}
+                                    </div>
+                                    {selectedUnitIds.length > 0 && selectedUnitIds.length < units.length && (
+                                        <div className="border-t border-pm-secondary/10 p-2 bg-pm-light/30">
+                                            <p className="text-[10px] font-black uppercase tracking-widest text-pm-secondary/70 px-1 mb-1">Selecionadas</p>
+                                            <div className="flex flex-wrap gap-1">
+                                                {units.filter(u => selectedUnitIds.includes(u.id)).slice(0, 6).map(unit => (
+                                                    <span key={unit.id} className="px-2 py-1 rounded-md bg-white border border-pm-secondary/10 text-[10px] font-black text-pm-dark">
+                                                        {unit.name}
+                                                    </span>
+                                                ))}
+                                                {selectedUnitIds.length > 6 && (
+                                                    <span className="px-2 py-1 rounded-md bg-white border border-pm-secondary/10 text-[10px] font-black text-pm-secondary">
+                                                        +{selectedUnitIds.length - 6}
+                                                    </span>
+                                                )}
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
-                                <div className="flex-1 min-w-0">
-                                    <h4 className="text-sm font-black uppercase tracking-tight mb-0.5">{n.title}</h4>
-                                    <p className="text-xs font-bold opacity-80 leading-relaxed">{n.content}</p>
-                                </div>
-                                <div className="text-[10px] font-black opacity-40 uppercase tracking-widest mt-1">
-                                    {new Date(n.createdAt).toLocaleDateString('pt-BR')}
-                                </div>
-                            </div>
-                        );
-                    })}
+                            </>
+                        )}
+                    </div>
                 </div>
-            )}
+                <button
+                    onClick={() => setIsReportModalOpen(true)}
+                    className="px-5 py-2.5 rounded-xl bg-red-600 text-white text-sm font-black shadow-sm hover:bg-red-700 transition-all flex items-center gap-2"
+                >
+                    <FileText className="w-4 h-4" />
+                    Imprimir relatório
+                </button>
+            </div>
+
             {/* 1. KPIs de Inteligência Executiva */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="bg-white p-6 rounded-3xl border border-pm-secondary/15 shadow-sm hover:shadow-premium transition-all flex items-center gap-5">
@@ -400,63 +469,6 @@ export default function DashboardExecutivo() {
                         <h4 className="text-2xl font-black text-pm-dark leading-none">{estatisticasResumo.atividadeGlobal}</h4>
                     </div>
                 </div>
-            </div>
-
-            {/* 2. Cabecalho e Filtros (Real-Time) */}
-            <div className="bg-white p-5 rounded-2xl shadow-premium border border-pm-secondary/15 flex flex-wrap gap-4 items-center justify-between">
-                <div className="flex gap-4 flex-wrap items-center">
-                    <span className="text-xs font-black text-pm-secondary/60 uppercase tracking-[0.15em]">Filtro de Comando</span>
-                    <div className="relative">
-                        <button
-                            onClick={() => user?.role !== 'editor' && setIsDropdownOpen(!isDropdownOpen)}
-                            className={`bg-pm-light/50 border border-pm-secondary/20 text-sm font-bold rounded-xl px-5 py-2.5 text-pm-dark flex items-center gap-3 outline-none transition-all ${user?.role === 'editor' ? 'cursor-not-allowed opacity-60' : 'cursor-pointer hover:bg-white hover:border-pm-primary/40 hover:shadow-sm'}`}
-                        >
-                            <span className="max-w-[150px] sm:max-w-none truncate">
-                                {selectedUnitIds.length === units.length ? 'Todas as Unidades' : `${selectedUnitIds.length} Unidade(s) selecionada(s)`}
-                            </span>
-                            {user?.role !== 'editor' && <ChevronDown className={`w-4 h-4 text-pm-primary transition-transform ${isDropdownOpen ? 'rotate-180' : ''}`} />}
-                        </button>
-
-                        {isDropdownOpen && user?.role !== 'editor' && (
-                            <>
-                                <div className="fixed inset-0 z-10" onClick={() => setIsDropdownOpen(false)}></div>
-                                <div className="absolute top-full left-0 mt-2 w-72 bg-white border border-pm-secondary/20 shadow-xl rounded-xl z-20 flex flex-col overflow-hidden">
-                                    <div className="p-2 border-b border-pm-secondary/10 flex gap-2">
-                                        <button onClick={handleSelectAll} className="flex-1 text-xs font-semibold bg-pm-light text-pm-dark py-1.5 rounded hover:bg-pm-secondary/20 transition-colors">Selecionar Todas</button>
-                                        <button onClick={handleClearAll} className="flex-1 text-xs font-semibold bg-red-50 text-red-600 py-1.5 rounded hover:bg-red-100 transition-colors">Limpar</button>
-                                    </div>
-                                    <div className="max-h-64 overflow-y-auto w-full p-2 flex flex-col gap-1">
-                                        {units.map(u => {
-                                            const isSelected = selectedUnitIds.includes(u.id);
-                                            return (
-                                                <div
-                                                    key={u.id}
-                                                    onClick={(e) => { e.stopPropagation(); handleToggleUnit(u.id); }}
-                                                    className={`flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors ${isSelected ? 'bg-pm-primary/10 hover:bg-pm-primary/20' : 'hover:bg-pm-light'}`}
-                                                >
-                                                    <div className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 ${isSelected ? 'bg-pm-primary border-pm-primary text-white' : 'border-pm-secondary/40'}`}>
-                                                        {isSelected && <Check className="w-3 h-3" />}
-                                                    </div>
-                                                    <div className="flex flex-col truncate">
-                                                        <span className="text-sm text-pm-dark truncate">{u.name}</span>
-                                                        {u.full_name && <span className="text-[10px] text-pm-secondary truncate uppercase">{u.full_name}</span>}
-                                                    </div>
-                                                </div>
-                                            )
-                                        })}
-                                    </div>
-                                </div>
-                            </>
-                        )}
-                    </div>
-                </div>
-                <button
-                    onClick={() => setIsReportModalOpen(true)}
-                    className="btn btn-primary"
-                >
-                    <FileText className="w-4 h-4" />
-                    Exportar Relatório em PDF
-                </button>
             </div>
 
             {/* KPIs Hierarquicos */}

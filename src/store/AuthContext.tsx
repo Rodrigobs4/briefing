@@ -22,6 +22,8 @@ export interface DataGroup {
     title: string;
     order: number;
     mode: 'snapshot' | 'collection';
+    categoryTitle?: string | null;
+    categoryOrder?: number;
 }
 
 export interface Field {
@@ -251,7 +253,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             ]);
 
             if (u.data) setUnits(u.data.map(d => ({ id: d.id, name: d.name, full_name: d.full_name ?? null, order_index: d.order_index ?? 999, description: d.description, createdAt: d.created_at })));
-            if (dg.data) setDataGroups(dg.data.map(d => ({ id: d.id, unitId: d.unit_id, title: d.title, order: d.order_index, mode: d.mode as any })));
+            if (dg.data) setDataGroups(dg.data.map(d => ({ id: d.id, unitId: d.unit_id, title: d.title, order: d.order_index, mode: d.mode as any, categoryTitle: d.category_title ?? null, categoryOrder: d.category_order ?? 999 })));
             if (f.data) setFields(f.data.map(d => ({ id: d.id, dataGroupId: d.data_group_id, name: d.name, type: d.type as FieldType, required: d.required, order: d.order_index, isActive: d.is_active, calculationConfig: d.calculation_config })));
             if (e.data) setEntries(e.data.map(d => ({ id: d.id, unitId: d.unit_id, dataGroupId: d.data_group_id, updatedAt: d.updated_at, updatedBy: d.updated_by })));
             if (fv.data) setFieldValues(fv.data.map(d => ({ id: d.id, entryId: d.entry_id, fieldId: d.field_id, value: d.value })));
@@ -338,7 +340,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     const addDataGroup = async (group: DataGroup) => {
-        const { error } = await supabase.from('data_groups').insert({ id: group.id, unit_id: group.unitId, title: group.title, order_index: group.order, mode: group.mode });
+        const { error } = await supabase.from('data_groups').insert({ id: group.id, unit_id: group.unitId, title: group.title, order_index: group.order, mode: group.mode, category_title: group.categoryTitle ?? null, category_order: group.categoryOrder ?? 999 });
         if (error) console.error("Erro ao adicionar DataGroup:", error);
         await fetchAllData();
     };
@@ -347,6 +349,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const payload: any = {};
         if (updates.title) payload.title = updates.title;
         if (updates.order !== undefined) payload.order_index = updates.order;
+        if (updates.categoryTitle !== undefined) payload.category_title = updates.categoryTitle;
+        if (updates.categoryOrder !== undefined) payload.category_order = updates.categoryOrder;
         await supabase.from('data_groups').update(payload).eq('id', id);
         await fetchAllData();
     };

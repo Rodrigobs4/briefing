@@ -197,6 +197,7 @@ export default function AdminDynamicForms() {
     // Group CRUDS
     const [newGroupTitle, setNewGroupTitle] = useState('');
     const [newGroupMode, setNewGroupMode] = useState<'snapshot' | 'collection'>('snapshot');
+    const [newGroupCategory, setNewGroupCategory] = useState('');
 
     // Editing State
     const [editingField, setEditingField] = useState<Field | null>(null);
@@ -213,6 +214,7 @@ export default function AdminDynamicForms() {
     // Group CRUDS State
     const [editingGroup, setEditingGroup] = useState<any>(null); // Type is DataGroup
     const [editGroupTitle, setEditGroupTitle] = useState('');
+    const [editGroupCategory, setEditGroupCategory] = useState('');
     const [deletingGroup, setDeletingGroup] = useState<any>(null);
 
     // Unit (Topic) Edit State
@@ -226,6 +228,25 @@ export default function AdminDynamicForms() {
     const [iconModalTarget, setIconModalTarget] = useState<'create' | 'edit' | null>(null);
 
     const unitGroups = dataGroups.filter(g => g.unitId === selectedUnit);
+    const categoryOptions = Array.from(new Set(unitGroups.map(g => g.categoryTitle?.trim()).filter(Boolean) as string[]));
+    const getCategoryOrder = (categoryTitle: string) => {
+        const matching = unitGroups.filter(g => (g.categoryTitle || '').trim() === categoryTitle);
+        return matching.length > 0 ? Math.min(...matching.map(g => g.categoryOrder ?? 999)) : categoryOptions.length + 1;
+    };
+    const groupedUnitGroups = [...unitGroups]
+        .sort((a, b) => (a.categoryOrder ?? 999) - (b.categoryOrder ?? 999) || a.order - b.order)
+        .reduce<{ title: string; order: number; groups: typeof unitGroups }[]>((acc, group) => {
+            const title = group.categoryTitle?.trim() || 'Sem categoria';
+            const existing = acc.find(item => item.title === title);
+            if (existing) {
+                existing.groups.push(group);
+                existing.order = Math.min(existing.order, group.categoryOrder ?? 999);
+                return acc;
+            }
+            acc.push({ title, order: group.categoryOrder ?? 999, groups: [group] });
+            return acc;
+        }, [])
+        .sort((a, b) => a.order - b.order);
 
     // Apenas campos ativos para este painel (excluindo os soft-deleted)
     const groupFields = fields.filter(f => f.dataGroupId === selectedGroup && f.isActive).sort((a, b) => a.order - b.order);
@@ -274,10 +295,13 @@ export default function AdminDynamicForms() {
             unitId: selectedUnit,
             title: newGroupTitle,
             order: unitGroups.length + 1,
-            mode: newGroupMode
+            mode: newGroupMode,
+            categoryTitle: newGroupCategory.trim() || null,
+            categoryOrder: newGroupCategory.trim() ? getCategoryOrder(newGroupCategory.trim()) : 999
         });
         setNewGroupTitle('');
         setNewGroupMode('snapshot');
+        setNewGroupCategory('');
         setSelectedGroup(newId);
     };
 
@@ -290,7 +314,9 @@ export default function AdminDynamicForms() {
             unitId: groupToCopy.unitId,
             title: `${groupToCopy.title} (Cópia)`,
             order: unitGroups.length + 1,
-            mode: groupToCopy.mode
+            mode: groupToCopy.mode,
+            categoryTitle: groupToCopy.categoryTitle ?? null,
+            categoryOrder: groupToCopy.categoryOrder ?? 999
         });
 
         // Copia os Campos pertencentes
@@ -308,7 +334,12 @@ export default function AdminDynamicForms() {
 
     const saveGroupEdit = () => {
         if (!editingGroup || !editGroupTitle.trim()) return;
-        updateDataGroup(editingGroup.id, { title: editGroupTitle });
+        const normalizedCategory = editGroupCategory.trim();
+        updateDataGroup(editingGroup.id, {
+            title: editGroupTitle,
+            categoryTitle: normalizedCategory || null,
+            categoryOrder: normalizedCategory ? getCategoryOrder(normalizedCategory) : 999
+        });
         setEditingGroup(null);
     }
 
@@ -646,6 +677,25 @@ export default function AdminDynamicForms() {
                                         />
                                     </div>
                                     <div>
+                                        <label className="input-label">CATEGORIA DO RELATÓRIO</label>
+                                        <input
+                                            list="category-options"
+                                            type="text"
+                                            placeholder="Ex: Operacional, Administrativo..."
+                                            value={newGroupCategory}
+                                            onChange={e => setNewGroupCategory(e.target.value)}
+                                            className="input-field"
+                                        />
+                                        <datalist id="category-options">
+                                            {categoryOptions.map(category => (
+                                                <option key={category} value={category} />
+                                            ))}
+                                        </datalist>
+                                        <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
+                                            Use categorias para agrupar seções no relatório e facilitar a leitura.
+                                        </p>
+                                    </div>
+                                    <div>
                                         <label className="input-label">MODO OPERACIONAL</label>
                                         <div className="grid grid-cols-2 gap-3 p-1.5 bg-white border border-pm-secondary/20 rounded-2xl shadow-inner">
                                             <button
@@ -675,9 +725,15 @@ export default function AdminDynamicForms() {
                             )}
                         </div>
 
-                        <div className="p-6 flex-1 overflow-y-auto space-y-3 custom-scrollbar">
-                            {selectedUnit && unitGroups.sort((a, b) => a.order - b.order).map((g, groupIdx) => (
-                                <div key={g.id} className="group/dg relative">
+                        <div className="p-6 flex-1 overflow-y-auto space-y-5 custom-scrollbar">
+                            {selectedUnit && groupedUnitGroups.map(category => (
+                                <div key={category.title} className="space-y-3">
+                                    <div className="px-3 py-2 rounded-2xl bg-pm-light border border-pm-secondary/10">
+                                        <p className="text-[10px] font-black uppercase tracking-[0.16em] text-pm-dark">{category.title}</p>
+                                        <p className="text-[9px] font-bold uppercase tracking-widest text-pm-secondary/60">{category.groups.length} seção(ões)</p>
+                                    </div>
+                                    {category.groups.sort((a, b) => a.order - b.order).map((g, groupIdx) => (
+                                <div key={g.id} className="group/dg relative ml-3">
                                     <button
                                         onClick={() => setSelectedGroup(g.id)}
                                         className={`w-full flex items-center justify-between gap-4 pl-12 pr-6 py-5 rounded-3xl transition-all border-2 text-left ${selectedGroup === g.id
@@ -721,7 +777,7 @@ export default function AdminDynamicForms() {
                                                 <Copy className="w-4 h-4" />
                                             </button>
                                             <button
-                                                onClick={(e) => { e.stopPropagation(); setEditingGroup(g); setEditGroupTitle(g.title); }}
+                                                onClick={(e) => { e.stopPropagation(); setEditingGroup(g); setEditGroupTitle(g.title); setEditGroupCategory(g.categoryTitle || ''); }}
                                                 className={`p-2 rounded-xl transition-all ${selectedGroup === g.id ? 'bg-white/10 text-white hover:bg-white/20' : 'bg-white text-pm-secondary hover:text-pm-primary shadow-premium border border-pm-secondary/10'}`}
                                             >
                                                 <Edit2 className="w-4 h-4" />
@@ -734,6 +790,8 @@ export default function AdminDynamicForms() {
                                             </button>
                                         </div>
                                     </button>
+                                </div>
+                                    ))}
                                 </div>
                             ))}
                         </div>
@@ -1148,11 +1206,30 @@ export default function AdminDynamicForms() {
                                     placeholder="Ex: Recursos Logísticos"
                                 />
                             </div>
+                            <div>
+                                <label className="input-label">CATEGORIA DO RELATÓRIO</label>
+                                <input
+                                    list="edit-category-options"
+                                    type="text"
+                                    value={editGroupCategory}
+                                    onChange={e => setEditGroupCategory(e.target.value)}
+                                    className="input-field h-14"
+                                    placeholder="Ex: Operacional, Administrativo..."
+                                />
+                                <datalist id="edit-category-options">
+                                    {categoryOptions.map(category => (
+                                        <option key={category} value={category} />
+                                    ))}
+                                </datalist>
+                                <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
+                                    Seções com a mesma categoria aparecem juntas no relatório.
+                                </p>
+                            </div>
                         </div>
 
                         <div className="mt-10 flex flex-col gap-3">
                             <button onClick={saveGroupEdit} className="btn btn-primary h-14 w-full">
-                                <Save className="w-5 h-5" /> Salvar Título
+                                <Save className="w-5 h-5" /> Salvar Seção
                             </button>
                             <button 
                                 onClick={() => setEditingGroup(null)} 
