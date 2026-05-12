@@ -807,14 +807,22 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                     }
                     .report-collection-panel,
                     .report-metric-panel {
-                        break-inside: auto;
-                        page-break-inside: auto;
-                    }
-                    .report-collection-panel .report-section-header,
-                    .report-collection-panel .report-table thead,
-                    .report-collection-panel .report-table tbody tr:first-child {
                         break-inside: avoid;
                         page-break-inside: avoid;
+                    }
+                    .report-table,
+                    .report-table table,
+                    .report-table thead,
+                    .report-table tbody,
+                    .report-table tbody tr:first-child,
+                    .report-collection-panel .report-section-header,
+                    .report-metric-panel .report-section-header {
+                        break-inside: avoid;
+                        page-break-inside: avoid;
+                    }
+                    .report-table {
+                        break-before: avoid;
+                        page-break-before: avoid;
                     }
                     thead { display: table-header-group; }
                     tfoot { display: table-footer-group; }
@@ -889,6 +897,8 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                 .report-metric-panel,
                 .report-collection-panel {
                     margin-bottom: 16px;
+                    break-inside: avoid;
+                    page-break-inside: avoid;
                 }
 
                 .report-section-header {
@@ -910,6 +920,8 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                     box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
                     break-before: avoid;
                     page-break-before: avoid;
+                    break-inside: avoid;
+                    page-break-inside: avoid;
                 }
 
                 .report-table thead tr {

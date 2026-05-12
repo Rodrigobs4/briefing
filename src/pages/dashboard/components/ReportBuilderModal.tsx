@@ -30,6 +30,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
     const [selectedUnits, setSelectedUnits] = useState<string[]>([]);
     const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
     const [expandedUnits, setExpandedUnits] = useState<string[]>([]);
+    const [collapsedCategories, setCollapsedCategories] = useState<string[]>([]);
     const [customCategories, setCustomCategories] = useState<string[]>([]);
     const [categoryOrder, setCategoryOrder] = useState<string[]>([]);
     const [unitOrder, setUnitOrder] = useState<string[]>([]);
@@ -88,6 +89,12 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
     const toggleExpandUnit = (unitId: string) => {
         setExpandedUnits(prev =>
             prev.includes(unitId) ? prev.filter(id => id !== unitId) : [...prev, unitId]
+        );
+    };
+
+    const toggleCategoryCollapse = (category: string) => {
+        setCollapsedCategories(prev =>
+            prev.includes(category) ? prev.filter(item => item !== category) : [...prev, category]
         );
     };
 
@@ -424,12 +431,23 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                                 </div>
                             ) : (
                                 <div className="space-y-4">
-                                    {topicsByCategory.map(({ category, topics }, categoryIndex) => (
+                                    {topicsByCategory.map(({ category, topics }, categoryIndex) => {
+                                        const isCategoryCollapsed = collapsedCategories.includes(category);
+
+                                        return (
                                         <section key={category} className="border border-pm-secondary/15 rounded-2xl overflow-hidden bg-white shadow-sm">
                                             <div className="bg-[#d8cca1] border-b border-[#b8a979] px-4 py-3 flex items-center gap-3">
                                                 <span className="w-8 h-8 rounded-lg bg-pm-dark text-white flex items-center justify-center text-sm font-black shrink-0">
                                                     {categoryIndex + 1}
                                                 </span>
+                                                <button
+                                                    onClick={() => toggleCategoryCollapse(category)}
+                                                    className="p-2 text-pm-dark hover:text-pm-primary rounded-lg hover:bg-white/60 transition-colors"
+                                                    title={isCategoryCollapsed ? 'Expandir categoria' : 'Minimizar categoria'}
+                                                    aria-label={isCategoryCollapsed ? `Expandir ${category}` : `Minimizar ${category}`}
+                                                >
+                                                    {isCategoryCollapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                                                </button>
                                                 <div className="flex-1 min-w-0">
                                                     <h4 className="text-base font-black text-pm-dark truncate">{category}</h4>
                                                     <p className="text-[10px] uppercase tracking-wider text-pm-secondary font-black">
@@ -463,7 +481,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                                                 )}
                                             </div>
 
-                                            <div className="p-3 space-y-2">
+                                            {!isCategoryCollapsed && <div className="p-3 space-y-2">
                                                 {topics.length === 0 ? (
                                                     <p className="text-xs text-pm-secondary text-center py-5 bg-pm-light/40 rounded-xl">
                                                         Categoria criada. Use o campo "Categoria" de um tópico para movê-lo para este bloco.
@@ -528,9 +546,10 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                                                         </div>
                                                     );
                                                 })}
-                                            </div>
+                                            </div>}
                                         </section>
-                                    ))}
+                                    );
+                                    })}
                                 </div>
                             )}
                         </div>
