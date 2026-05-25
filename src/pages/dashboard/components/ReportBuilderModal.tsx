@@ -9,7 +9,6 @@ import {
     ChevronRight,
     ClipboardCheck,
     Eye,
-    GalleryHorizontalEnd,
     FileText,
     Filter,
     Layers3,
@@ -25,7 +24,6 @@ import {
 } from 'lucide-react';
 import { useReactToPrint } from 'react-to-print';
 import ReportPdfRenderer from './ReportPdfRenderer';
-import ReportPresentationRenderer from './ReportPresentationRenderer';
 import { supabase } from '../../../lib/supabase';
 import { compareTextPtBr, sortByTextPtBr } from '../../../utils/textOrdering';
 
@@ -48,7 +46,6 @@ type SavedReportConfiguration = {
     unitOrder: string[];
     groupOrder: string[];
     groupAssignments: Record<string, string>;
-    reportFormat: 'technical' | 'presentation';
     fontSize: 'standard' | 'large';
     technicalSections: {
         showExecutiveSummary: boolean;
@@ -76,6 +73,7 @@ const isReportHighlightTarget = (value: unknown): value is ReportHighlightTarget
     value === 'row' || value === 'column' || value === 'cell';
 const isReportHighlightColor = (value: unknown): value is ReportHighlightColor =>
     REPORT_HIGHLIGHT_COLORS.some(color => color.value === value);
+const GLOBAL_REPORT_CONFIGURATION_ID = 'general';
 
 const normalizeRegionalKey = (value?: string | null) =>
     (value || '')
@@ -119,9 +117,15 @@ function isRegionalCommandAsUnit(
 export default function ReportBuilderModal({ onClose }: { onClose: () => void }) {
     const { units: allUnits, regionalCommands, dataGroups, user } = useAuth();
     const reportUnits = sortByTextPtBr(allUnits.filter(unit => !isRegionalCommandAsUnit(unit, regionalCommands)), unit => unit.name);
-    const units = user?.role === 'editor' && user.unitId ? reportUnits.filter(u => u.id === user.unitId) : reportUnits;
+    const editorUnitIds = user?.unitIds && user.unitIds.length > 0
+        ? user.unitIds
+        : user?.unitId
+            ? [user.unitId]
+            : [];
+    const units = user?.role === 'editor' ? reportUnits.filter(unit => editorUnitIds.includes(unit.id)) : reportUnits;
     const visibleUnitIds = units.map(unit => unit.id);
     const visibleDataGroups = dataGroups.filter(group => visibleUnitIds.includes(group.unitId));
+    const canManageGlobalModel = user?.role === 'admin';
 
     const [selectedUnits, setSelectedUnits] = useState<string[]>([]);
     const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
@@ -135,7 +139,6 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
     const [newCategoryName, setNewCategoryName] = useState('');
     const [searchTerm, setSearchTerm] = useState('');
     const [reportMode, setReportMode] = useState<'builder' | 'preview'>('builder');
-    const [reportFormat, setReportFormat] = useState<'technical' | 'presentation'>('technical');
     const [fontSize, setFontSize] = useState<'standard' | 'large'>('standard');
     const [technicalSections, setTechnicalSections] = useState({
         showExecutiveSummary: true,
@@ -178,14 +181,13 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                 const [configurationResult, highlightResult] = await Promise.race([
                     Promise.all([
                         supabase
-                            .from('report_configurations')
+                            .from('global_report_configurations')
                             .select('configuration')
-                            .eq('user_id', user.id)
+                            .eq('id', GLOBAL_REPORT_CONFIGURATION_ID)
                             .maybeSingle(),
                         supabase
-                            .from('report_table_highlights')
+                            .from('global_report_table_highlights')
                             .select('id, data_group_id, target, row_index, column_index, color')
-                            .eq('user_id', user.id)
                     ]),
                     new Promise<never>((_, reject) => {
                         timeoutId = setTimeout(() => reject(new Error('Tempo excedido ao carregar modelo.')), 10000);
@@ -218,24 +220,11 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                 setGroupOrder(getStringArray(configuration.groupOrder).filter(id => restoredGroups.includes(id)));
                 setGroupAssignments(assignments);
                 setExpandedUnits(restoredUnits);
-                setReportFormat(configuration.reportFormat === 'presentation' ? 'presentation' : 'technical');
                 setFontSize(configuration.fontSize === 'large' ? 'large' : 'standard');
                 setTechnicalSections({
                     showExecutiveSummary: configuration.technicalSections?.showExecutiveSummary !== false,
                     showSubjectMap: configuration.technicalSections?.showSubjectMap !== false
                 });
-                const legacyHighlights = Array.isArray(configuration.tableHighlights)
-                    ? configuration.tableHighlights.filter((rule): rule is ReportTableHighlightRule => {
-                        if (!rule || typeof rule !== 'object') return false;
-                        return typeof rule.id === 'string'
-                            && typeof rule.groupId === 'string'
-                            && allowedGroupIds.has(rule.groupId)
-                            && isReportHighlightTarget(rule.target)
-                            && isReportHighlightColor(rule.color)
-                            && (rule.rowIndex === undefined || (Number.isInteger(rule.rowIndex) && rule.rowIndex >= 0))
-                            && (rule.columnIndex === undefined || (Number.isInteger(rule.columnIndex) && rule.columnIndex >= 0));
-                    })
-                    : [];
                 const persistedHighlights = (highlightResult.data || [])
                     .filter(rule => allowedGroupIds.has(rule.data_group_id) && isReportHighlightTarget(rule.target) && isReportHighlightColor(rule.color))
                     .map(rule => ({
@@ -246,34 +235,10 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                         columnIndex: rule.column_index >= 0 ? rule.column_index : undefined,
                         color: rule.color as ReportHighlightColor
                     }));
-                const restoredHighlights = persistedHighlights.length > 0 ? persistedHighlights : legacyHighlights;
-                setTableHighlights(restoredHighlights);
-                if (persistedHighlights.length === 0 && legacyHighlights.length > 0) {
-                    const { data: migratedHighlights, error } = await supabase.from('report_table_highlights').upsert(
-                        legacyHighlights.map(rule => ({
-                            user_id: user.id,
-                            data_group_id: rule.groupId,
-                            target: rule.target,
-                            row_index: rule.rowIndex ?? -1,
-                            column_index: rule.columnIndex ?? -1,
-                            color: rule.color,
-                            updated_at: new Date().toISOString()
-                        })),
-                        { onConflict: 'user_id,data_group_id,target,row_index,column_index' }
-                    ).select('id, data_group_id, target, row_index, column_index, color');
-                    if (error) throw error;
-                    setTableHighlights((migratedHighlights || []).map(rule => ({
-                        id: rule.id,
-                        groupId: rule.data_group_id,
-                        target: rule.target as ReportHighlightTarget,
-                        rowIndex: rule.row_index >= 0 ? rule.row_index : undefined,
-                        columnIndex: rule.column_index >= 0 ? rule.column_index : undefined,
-                        color: rule.color as ReportHighlightColor
-                    })));
-                }
+                setTableHighlights(persistedHighlights);
                 setModelMessage(data?.configuration
-                    ? { type: 'success', text: 'Modelo salvo carregado.' }
-                    : { type: 'success', text: 'Nenhum modelo salvo encontrado. Monte o relatório e salve seu modelo.' });
+                    ? { type: 'success', text: 'Modelo global carregado.' }
+                    : { type: 'success', text: canManageGlobalModel ? 'Nenhum modelo global encontrado. Monte o relatório e publique o modelo.' : 'Nenhum modelo global foi publicado pelo administrador.' });
             } catch (error) {
                 if (!isActive) return;
                 loadedConfigurationUserId.current = null;
@@ -289,7 +254,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
         return () => {
             isActive = false;
         };
-    }, [user?.id, allUnits.length, dataGroups.length, modelReloadRequest]);
+    }, [user?.id, allUnits.length, dataGroups.length, modelReloadRequest, canManageGlobalModel]);
 
     const reloadSavedModel = () => {
         loadedConfigurationUserId.current = null;
@@ -512,8 +477,8 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
     };
 
     const addTableHighlight = async (groupId: string) => {
-        if (!user?.id) {
-            setModelMessage({ type: 'error', text: 'Usuário não identificado para salvar a cor.' });
+        if (!user?.id || !canManageGlobalModel) {
+            setModelMessage({ type: 'error', text: 'Somente administradores podem alterar o modelo global.' });
             return;
         }
 
@@ -523,16 +488,16 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
         setModelMessage(null);
         try {
             const { data, error } = await supabase
-                .from('report_table_highlights')
+                .from('global_report_table_highlights')
                 .upsert({
-                    user_id: user.id,
                     data_group_id: groupId,
                     target: highlightTarget,
                     row_index: rowIndex ?? -1,
                     column_index: columnIndex ?? -1,
                     color: highlightColor,
+                    updated_by: user.id,
                     updated_at: new Date().toISOString()
-                }, { onConflict: 'user_id,data_group_id,target,row_index,column_index' })
+                }, { onConflict: 'data_group_id,target,row_index,column_index' })
                 .select('id')
                 .single();
 
@@ -564,16 +529,15 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
     };
 
     const removeTableHighlight = async (ruleId: string) => {
-        if (!user?.id) return;
+        if (!user?.id || !canManageGlobalModel) return;
 
         setIsSavingHighlight(true);
         setModelMessage(null);
         try {
             const { error } = await supabase
-                .from('report_table_highlights')
+                .from('global_report_table_highlights')
                 .delete()
                 .eq('id', ruleId)
-                .eq('user_id', user.id);
             if (error) throw error;
             setTableHighlights(previous => previous.filter(rule => rule.id !== ruleId));
             setModelMessage({ type: 'success', text: 'Cor removida.' });
@@ -586,8 +550,8 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
     };
 
     const saveReportConfiguration = async () => {
-        if (!user?.id) {
-            setModelMessage({ type: 'error', text: 'Usuário não identificado para salvar o modelo.' });
+        if (!user?.id || !canManageGlobalModel) {
+            setModelMessage({ type: 'error', text: 'Somente administradores podem publicar o modelo global.' });
             return;
         }
 
@@ -601,7 +565,6 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
             groupAssignments: Object.fromEntries(
                 Object.entries(groupAssignments).filter(([unitId]) => visibleUnitIds.includes(unitId))
             ),
-            reportFormat,
             fontSize,
             technicalSections
         };
@@ -610,16 +573,17 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
         setModelMessage(null);
         try {
             const { error } = await supabase
-                .from('report_configurations')
+                .from('global_report_configurations')
                 .upsert({
-                    user_id: user.id,
+                    id: GLOBAL_REPORT_CONFIGURATION_ID,
                     configuration,
+                    updated_by: user.id,
                     updated_at: new Date().toISOString()
-                }, { onConflict: 'user_id' });
+                }, { onConflict: 'id' });
 
             setModelMessage(error
-                ? { type: 'error', text: 'Falha ao salvar o modelo de relatório.' }
-                : { type: 'success', text: 'Modelo de relatório salvo.' });
+                ? { type: 'error', text: 'Falha ao publicar o modelo global.' }
+                : { type: 'success', text: 'Modelo global publicado para todos os usuários.' });
         } finally {
             setIsSavingModel(false);
         }
@@ -675,21 +639,6 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                         </div>
                         </div>
 
-                        <div className="bg-pm-light border border-pm-secondary/15 rounded-xl p-1 flex shrink-0">
-                            <button
-                                onClick={() => setReportFormat('technical')}
-                                className={`px-3 py-2 rounded-lg text-xs font-black uppercase flex items-center gap-1.5 transition-colors ${reportFormat === 'technical' ? 'bg-white text-pm-dark shadow-sm' : 'text-pm-secondary hover:text-pm-dark'}`}
-                            >
-                                <FileText className="w-3.5 h-3.5" /> Técnico
-                            </button>
-                            <button
-                                onClick={() => setReportFormat('presentation')}
-                                className={`px-3 py-2 rounded-lg text-xs font-black uppercase flex items-center gap-1.5 transition-colors ${reportFormat === 'presentation' ? 'bg-white text-pm-dark shadow-sm' : 'text-pm-secondary hover:text-pm-dark'}`}
-                            >
-                                <GalleryHorizontalEnd className="w-3.5 h-3.5" /> Apresentação
-                            </button>
-                        </div>
-
                         <div className="bg-pm-light border border-pm-secondary/15 rounded-xl p-1 flex shrink-0" aria-label="Tamanho da fonte no relatório">
                             <button
                                 onClick={() => setFontSize('standard')}
@@ -705,8 +654,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                             </button>
                         </div>
 
-                        {reportFormat === 'technical' && (
-                            <div className="bg-white border border-pm-secondary/15 rounded-xl p-2 flex flex-col sm:flex-row gap-1.5 shrink-0">
+                        <div className="bg-white border border-pm-secondary/15 rounded-xl p-2 flex flex-col sm:flex-row gap-1.5 shrink-0">
                                 <button
                                     onClick={() => toggleTechnicalSection('showExecutiveSummary')}
                                     className="px-2.5 py-1.5 rounded-lg text-[11px] font-black uppercase flex items-center gap-1.5 text-pm-dark hover:bg-pm-light transition-colors"
@@ -721,8 +669,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                                     {technicalSections.showSubjectMap ? <CheckSquare className="w-3.5 h-3.5 text-pm-primary" /> : <Square className="w-3.5 h-3.5 text-pm-secondary" />}
                                     Mapa de assuntos
                                 </button>
-                            </div>
-                        )}
+                        </div>
 
                         <div className="bg-pm-light border border-pm-secondary/15 rounded-xl p-1 flex shrink-0">
                             <button
@@ -997,7 +944,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                                                                     {topicGroups.map(group => (
                                                                         <div key={group.id} className="flex items-center overflow-hidden rounded-md bg-pm-light border border-pm-secondary/10">
                                                                             <span className="px-2 py-1 text-[11px] font-bold text-pm-dark">{group.title}</span>
-                                                                            {reportFormat === 'technical' && group.reportLayout !== 'text' && (
+                                                                            {canManageGlobalModel && group.reportLayout !== 'text' && (
                                                                                 <button
                                                                                     onClick={() => setHighlightEditingGroupId(current => current === group.id ? '' : group.id)}
                                                                                     className={`px-2 py-1 text-[10px] font-black uppercase border-l border-pm-secondary/10 transition-colors ${highlightEditingGroupId === group.id ? 'bg-pm-primary text-white' : 'text-pm-secondary hover:bg-white hover:text-pm-dark'}`}
@@ -1008,7 +955,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                                                                         </div>
                                                                     ))}
                                                                 </div>
-                                                                {reportFormat === 'technical' && highlightedGroup && (
+                                                                {canManageGlobalModel && highlightedGroup && (
                                                                     <div className="mt-3 rounded-xl border border-pm-secondary/15 bg-[#fbfaf6] p-3">
                                                                         <div className="flex items-start justify-between gap-3 mb-3">
                                                                             <div>
@@ -1130,23 +1077,14 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                     <div className="flex-1 min-h-0 overflow-hidden bg-[#dedbd1]">
                         <div className="h-full overflow-auto custom-scrollbar p-4 md:p-6">
                             {isPrintable ? (
-                                <div className={`mx-auto bg-white shadow-2xl ring-1 ring-black/10 origin-top report-preview-sheet ${reportFormat === 'presentation' ? 'w-[297mm] min-h-[210mm]' : 'w-[210mm] min-h-[297mm]'}`}>
-                                    {reportFormat === 'presentation' ? (
-                                        <ReportPresentationRenderer
-                                            selectedUnits={selectedUnits}
-                                            selectedGroups={selectedGroups}
-                                            reportCategoryConfig={sharedReportConfig}
-                                            fontSize={fontSize}
-                                        />
-                                    ) : (
-                                        <ReportPdfRenderer
-                                            selectedUnits={selectedUnits}
-                                            selectedGroups={selectedGroups}
-                                            reportCategoryConfig={sharedReportConfig}
-                                            reportSectionsConfig={technicalSections}
-                                            fontSize={fontSize}
-                                        />
-                                    )}
+                                <div className="mx-auto bg-white shadow-2xl ring-1 ring-black/10 origin-top report-preview-sheet w-[210mm] min-h-[297mm]">
+                                    <ReportPdfRenderer
+                                        selectedUnits={selectedUnits}
+                                        selectedGroups={selectedGroups}
+                                        reportCategoryConfig={sharedReportConfig}
+                                        reportSectionsConfig={technicalSections}
+                                        fontSize={fontSize}
+                                    />
                                 </div>
                             ) : (
                                 <div className="h-full min-h-[360px] flex items-center justify-center text-center p-8">
@@ -1192,16 +1130,18 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                             className="px-4 py-2.5 text-sm font-black bg-white text-pm-dark rounded-lg hover:bg-pm-light transition-all border border-pm-secondary/20 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             {isLoadingSavedModel ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-                            Carregar modelo
+                            Carregar modelo global
                         </button>
-                        <button
-                            onClick={saveReportConfiguration}
-                            disabled={isSavingModel || isLoadingSavedModel || isSavingHighlight}
-                            className="px-5 py-2.5 text-sm font-black bg-white text-pm-dark rounded-lg hover:bg-pm-light transition-all border border-pm-secondary/20 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                            {isSavingModel ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                            {isSavingModel ? 'Salvando...' : 'Salvar modelo'}
-                        </button>
+                        {canManageGlobalModel && (
+                            <button
+                                onClick={saveReportConfiguration}
+                                disabled={isSavingModel || isLoadingSavedModel || isSavingHighlight}
+                                className="px-5 py-2.5 text-sm font-black bg-white text-pm-dark rounded-lg hover:bg-pm-light transition-all border border-pm-secondary/20 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                            >
+                                {isSavingModel ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                                {isSavingModel ? 'Publicando...' : 'Publicar modelo global'}
+                            </button>
+                        )}
                         <button
                             onClick={() => setReportMode(reportMode === 'preview' ? 'builder' : 'preview')}
                             disabled={!isPrintable}
@@ -1216,7 +1156,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                             className="px-6 py-2.5 text-sm font-black bg-pm-primary text-pm-light rounded-lg hover:bg-pm-primary/90 transition-all shadow-md flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             <Printer className="w-4 h-4" />
-                            {reportFormat === 'presentation' ? 'Imprimir apresentação' : 'Imprimir PDF'}
+                            Imprimir PDF
                         </button>
                     </div>
                 </div>
@@ -1224,22 +1164,13 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
 
             <div style={{ display: 'none' }}>
                 <div ref={printRef}>
-                    {reportFormat === 'presentation' ? (
-                        <ReportPresentationRenderer
-                            selectedUnits={selectedUnits}
-                            selectedGroups={selectedGroups}
-                            reportCategoryConfig={sharedReportConfig}
-                            fontSize={fontSize}
-                        />
-                    ) : (
-                        <ReportPdfRenderer
-                            selectedUnits={selectedUnits}
-                            selectedGroups={selectedGroups}
-                            reportCategoryConfig={sharedReportConfig}
-                            reportSectionsConfig={technicalSections}
-                            fontSize={fontSize}
-                        />
-                    )}
+                    <ReportPdfRenderer
+                        selectedUnits={selectedUnits}
+                        selectedGroups={selectedGroups}
+                        reportCategoryConfig={sharedReportConfig}
+                        reportSectionsConfig={technicalSections}
+                        fontSize={fontSize}
+                    />
                 </div>
             </div>
         </div>

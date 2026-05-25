@@ -116,6 +116,33 @@ CREATE TABLE IF NOT EXISTS public.report_table_highlights (
     UNIQUE (user_id, data_group_id, target, row_index, column_index)
 );
 
+CREATE TABLE IF NOT EXISTS public.global_report_configurations (
+    id text PRIMARY KEY DEFAULT 'general',
+    configuration jsonb NOT NULL DEFAULT '{}'::jsonb,
+    updated_by uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
+    updated_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
+    CONSTRAINT global_report_configurations_singleton_check CHECK (id = 'general'),
+    CONSTRAINT global_report_configurations_configuration_object_check
+        CHECK (jsonb_typeof(configuration) = 'object')
+);
+
+CREATE TABLE IF NOT EXISTS public.global_report_table_highlights (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    data_group_id uuid NOT NULL REFERENCES public.data_groups(id) ON DELETE CASCADE,
+    target text NOT NULL CHECK (target IN ('row', 'column', 'cell')),
+    row_index integer NOT NULL DEFAULT -1,
+    column_index integer NOT NULL DEFAULT -1,
+    color text NOT NULL CHECK (color IN ('khaki', 'blue', 'green', 'amber', 'red')),
+    updated_by uuid REFERENCES public.profiles(id) ON DELETE SET NULL,
+    updated_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
+    CONSTRAINT global_report_table_highlights_position_check CHECK (
+        (target = 'row' AND row_index >= 0 AND column_index = -1)
+        OR (target = 'column' AND row_index = -1 AND column_index >= 0)
+        OR (target = 'cell' AND row_index >= 0 AND column_index >= 0)
+    ),
+    UNIQUE (data_group_id, target, row_index, column_index)
+);
+
 CREATE INDEX IF NOT EXISTS idx_units_order
 ON public.units (order_index, name);
 
@@ -139,6 +166,9 @@ ON public.field_values (entry_id);
 
 CREATE INDEX IF NOT EXISTS idx_notifications_active_created
 ON public.notifications (is_active, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_global_report_table_highlights_group
+ON public.global_report_table_highlights (data_group_id);
 
 CREATE OR REPLACE FUNCTION public.update_updated_at()
 RETURNS trigger AS $$
@@ -215,6 +245,8 @@ ALTER TABLE public.units ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.report_configurations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.report_table_highlights ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.global_report_configurations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.global_report_table_highlights ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.profile_units ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.data_groups ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.fields ENABLE ROW LEVEL SECURITY;
@@ -314,3 +346,23 @@ DROP POLICY IF EXISTS "Users manage own report table highlights" ON public.repor
 CREATE POLICY "Users manage own report table highlights" ON public.report_table_highlights
 FOR ALL USING (user_id = auth.uid())
 WITH CHECK (user_id = auth.uid());
+
+DROP POLICY IF EXISTS "Authenticated users read global report configuration" ON public.global_report_configurations;
+CREATE POLICY "Authenticated users read global report configuration" ON public.global_report_configurations
+FOR SELECT USING (auth.role() = 'authenticated');
+
+DROP POLICY IF EXISTS "Admins manage global report configuration" ON public.global_report_configurations;
+CREATE POLICY "Admins manage global report configuration" ON public.global_report_configurations
+FOR ALL
+USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin'))
+WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin'));
+
+DROP POLICY IF EXISTS "Authenticated users read global report highlights" ON public.global_report_table_highlights;
+CREATE POLICY "Authenticated users read global report highlights" ON public.global_report_table_highlights
+FOR SELECT USING (auth.role() = 'authenticated');
+
+DROP POLICY IF EXISTS "Admins manage global report highlights" ON public.global_report_table_highlights;
+CREATE POLICY "Admins manage global report highlights" ON public.global_report_table_highlights
+FOR ALL
+USING (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin'))
+WITH CHECK (EXISTS (SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin'));
