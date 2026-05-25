@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { useSettings } from '../../store/SettingsContext';
 import { getPublicUploadUrl } from '../../utils/storageUrls';
+import { compareTextPtBr, sortByTextPtBr } from '../../utils/textOrdering';
 
 interface AdminUser {
     id: string;
@@ -23,6 +24,7 @@ export default function UserReport({ users }: UserReportProps) {
     const date = useMemo(() => new Date().toLocaleDateString('pt-BR'), []);
     const time = useMemo(() => new Date().toLocaleTimeString('pt-BR'), []);
     const logoUrl = settings?.logo_path ? getPublicUploadUrl(settings.logo_path) : null;
+    const sortedUsers = sortByTextPtBr(users, user => user.full_name || user.email);
 
     return (
         <div className="bg-white text-black font-sans p-0 m-0 w-full max-w-none print:max-w-none">
@@ -70,7 +72,7 @@ export default function UserReport({ users }: UserReportProps) {
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100">
-                        {users.map((u, i) => (
+                        {sortedUsers.map((u, i) => (
                             <tr key={i} className={`hover:bg-slate-50 transition-colors ${!u.is_active ? 'bg-slate-50 grayscale opacity-60' : ''}`}>
                                 <td className="px-3 py-2 text-[10px] font-bold text-slate-800 border-r border-slate-100 uppercase truncate">
                                     {u.full_name}
@@ -81,7 +83,7 @@ export default function UserReport({ users }: UserReportProps) {
                                 </td>
                                 <td className="px-3 py-2 text-[9px] font-medium text-slate-700 border-r border-slate-100 leading-tight italic">
                                     {u.unit_names && u.unit_names.length > 0 
-                                        ? u.unit_names.join(', ') 
+                                        ? [...u.unit_names].sort(compareTextPtBr).join(', ')
                                         : (u.role === 'admin' ? 'ACESSO TOTAL (ADMIN)' : 'NENHUM VÍNCULO')}
                                 </td>
                                 <td className="px-1 py-2 text-center last:border-0">

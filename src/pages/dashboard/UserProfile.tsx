@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../../store/AuthContext';
 import { Shield, Lock, Mail, Save, User as UserIcon, Loader2, AlertCircle, Building2, Briefcase } from 'lucide-react';
+import { sortByTextPtBr } from '../../utils/textOrdering';
 
 export default function UserProfile() {
     const { user, updateUserPassword, updateUserEmail, units } = useAuth();
@@ -93,7 +94,7 @@ export default function UserProfile() {
 
     // Obter dados vinculados para exibição
     const userUnitIds = (user?.unitIds && user.unitIds.length > 0) ? user.unitIds : (user?.unitId ? [user.unitId] : []);
-    const userUnits = units.filter(u => userUnitIds.includes(u.id));
+    const userUnits = sortByTextPtBr(units.filter(u => userUnitIds.includes(u.id)), unit => unit.name);
 
     return (
         <div className="max-w-4xl mx-auto space-y-6">
@@ -145,7 +146,6 @@ export default function UserProfile() {
                                         userUnits.map(unit => (
                                             <div key={unit.id}>
                                                 <p className="font-semibold">{unit.name}</p>
-                                                {unit.full_name && <span className="block text-xs text-pm-secondary font-normal mt-0.5">{unit.full_name}</span>}
                                             </div>
                                         ))
                                     ) : (

@@ -5,6 +5,7 @@ import { supabase } from '../../lib/supabase';
 import { useReactToPrint } from 'react-to-print';
 import { useRef } from 'react';
 import UserReport from './UserReport';
+import { compareTextPtBr, sortByTextPtBr } from '../../utils/textOrdering';
 
 // Tipo Extendido exclusivo para visualização via API
 interface AdminUser {
@@ -80,7 +81,7 @@ export default function UsersPanel() {
             const { data, error } = await supabase.functions.invoke('admin-list-users');
             if (error) throw error;
             if (data?.error) throw new Error(data.error);
-            setUsersList(data.users || []);
+            setUsersList(sortByTextPtBr(data.users || [], listedUser => listedUser.full_name || listedUser.email));
         } catch (err: any) {
             showToast('error', `Erro ao carregar lista de usuários: ${err.message}`);
         } finally {
@@ -223,11 +224,13 @@ export default function UsersPanel() {
         setIsDeleteOpen(true);
     };
 
-    const filteredUsers = usersList.filter(u =>
-        u.full_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        u.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        u.unit_name?.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    const filteredUsers = usersList
+        .filter(u =>
+            u.full_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            u.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+            u.unit_name?.toLowerCase().includes(searchTerm.toLowerCase())
+        )
+        .sort((a, b) => compareTextPtBr(a.full_name || a.email, b.full_name || b.email));
 
     // Componente interno: seletor de tópicos com checkboxes
     const TopicsSelector = () => (
@@ -237,7 +240,7 @@ export default function UsersPanel() {
                 {units.length === 0 && (
                     <p className="text-xs text-pm-secondary p-3">Nenhum tópico cadastrado.</p>
                 )}
-                {units.map(u => {
+                {sortByTextPtBr(units, unit => unit.name).map(u => {
                     const isChecked = formUnitIds.includes(u.id);
                     return (
                         <button
@@ -351,7 +354,7 @@ export default function UsersPanel() {
                                     <td className="px-6 py-4">
                                         {u.unit_names && u.unit_names.length > 0 ? (
                                             <div className="flex flex-wrap gap-1">
-                                                {u.unit_names.map((name, i) => (
+                                                {[...u.unit_names].sort(compareTextPtBr).map((name, i) => (
                                                     <span key={i} className="px-2 py-0.5 bg-pm-primary/10 text-pm-primary border border-pm-primary/20 rounded-full text-[10px] font-semibold">
                                                         {name}
                                                     </span>
@@ -420,7 +423,7 @@ export default function UsersPanel() {
                                 <div><label className="block text-xs font-medium mb-1">Senha (Mín 6 desc)</label><input required type="text" minLength={6} value={formPassword} onChange={e => setFormPassword(e.target.value)} className="w-full border p-2 text-sm rounded-md" /></div>
                                 <div><label className="block text-xs font-medium mb-1">Perfil de Acesso</label>
                                     <select value={formRole} onChange={(e) => { setFormRole(e.target.value as Role); setFormUnitIds([]); }} className="w-full border p-2 text-sm rounded-md">
-                                        <option value="editor">Editor</option><option value="commander">Comandante</option><option value="admin">Administrador</option>
+                                        <option value="admin">Administrador</option><option value="commander">Comandante</option><option value="editor">Editor</option>
                                     </select>
                                 </div>
                                 {formRole === 'editor' && <TopicsSelector />}
@@ -450,7 +453,7 @@ export default function UsersPanel() {
                                 <div><label className="block text-xs font-medium mb-1">Nome Completo</label><input required value={formName} onChange={e => setFormName(e.target.value)} className="w-full border p-2 text-sm rounded-md" /></div>
                                 <div><label className="block text-xs font-medium mb-1">Perfil de Acesso</label>
                                     <select value={formRole} onChange={(e) => { setFormRole(e.target.value as Role); setFormUnitIds([]); }} className="w-full border p-2 text-sm rounded-md">
-                                        <option value="editor">Editor</option><option value="commander">Comandante</option><option value="admin">Administrador</option>
+                                        <option value="admin">Administrador</option><option value="commander">Comandante</option><option value="editor">Editor</option>
                                     </select>
                                 </div>
                                 {formRole === 'editor' && <TopicsSelector />}

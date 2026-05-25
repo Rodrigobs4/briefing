@@ -20,7 +20,7 @@ export default function GuidedTour({ isOpen, onClose }: { isOpen: boolean, onClo
         {
             targetId: 'nav-dashboard',
             title: 'Painel Estratégico',
-            content: 'Aqui você visualiza todos os indicadores em tempo real. Os gráficos mostram tendências e batimento de metas das unidades.',
+            content: 'Aqui você alterna entre briefing geral e briefing regional usando a chave no topo do painel.',
             position: 'right'
         },
         ...(user?.role === 'admin' || user?.role === 'editor' ? [{

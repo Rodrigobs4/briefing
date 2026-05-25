@@ -1,8 +1,20 @@
 import { useAuth, calculateFieldValue } from '../../../store/AuthContext';
 import { useSettings } from '../../../store/SettingsContext';
+import { formatBrazilianNumber } from '../../../utils/brazilianNumbers';
 import { getPublicUploadUrl } from '../../../utils/storageUrls';
-import { BarChart3, Building2, CalendarDays, ClipboardList, Layers3, MapPinned, MessageSquareText } from 'lucide-react';
+import { Building2, CalendarDays, ClipboardList, Clock, Layers3, MapPinned, MessageSquareText } from 'lucide-react';
 import { type ReactNode, useMemo } from 'react';
+
+type ReportHighlightTarget = 'row' | 'column' | 'cell';
+type ReportHighlightColor = 'khaki' | 'blue' | 'green' | 'amber' | 'red';
+type ReportTableHighlightRule = {
+    id: string;
+    groupId: string;
+    target: ReportHighlightTarget;
+    rowIndex?: number;
+    columnIndex?: number;
+    color: ReportHighlightColor;
+};
 
 interface ReportPdfRendererProps {
     selectedUnits: string[];
@@ -10,13 +22,19 @@ interface ReportPdfRendererProps {
     reportCategoryConfig?: {
         groupAssignments: Record<string, string>;
         categoryOrder: string[];
+        unitOrder?: string[];
         groupOrder?: string[];
+        tableHighlights?: ReportTableHighlightRule[];
     };
+    reportSectionsConfig?: {
+        showExecutiveSummary?: boolean;
+        showSubjectMap?: boolean;
+    };
+    fontSize?: 'standard' | 'large';
 }
 
-type TableRow = ReactNode[] | { type: 'section'; label: string };
-type RawMetricRow = TableRow | { type: 'yearly'; label: string; valuesByYear: Record<string, ReactNode> };
-type ChartItem = { label: string; value: number; tone?: 'khaki' | 'emerald' | 'amber' | 'slate' };
+type TableRow = ReactNode[] | { type: 'section'; label: string; groupId?: string };
+type RawMetricRow = TableRow | { type: 'yearly'; label: string; valuesByYear: Record<string, ReactNode>; showTotal: boolean; isCurrency: boolean };
 type IconStatCardProps = {
     icon: ReactNode;
     label: string;
@@ -25,6 +43,10 @@ type IconStatCardProps = {
     tone?: 'khaki' | 'emerald' | 'amber' | 'slate';
 };
 
+const FIRST_REPORT_YEAR = 2023;
+const CURRENT_REPORT_YEAR = Math.max(FIRST_REPORT_YEAR, new Date().getFullYear());
+const REPORT_YEARS = Array.from({ length: CURRENT_REPORT_YEAR - FIRST_REPORT_YEAR + 1 }, (_, index) => String(FIRST_REPORT_YEAR + index));
+
 // ==================================================================================
 // COMPONENTES AUXILIARES PARA RELATÓRIO EXECUTIVO (COMPACTOS)
 // ==================================================================================
@@ -32,6 +54,17 @@ type IconStatCardProps = {
 const SectionHeader = ({ title }: { title: string }) => (
     <div className="report-section-header bg-slate-100 border-l-4 border-slate-900 px-3 py-2 mb-2">
         <h2 className="text-[12px] font-black text-slate-900 uppercase tracking-tight">{title}</h2>
+    </div>
+);
+
+const TextSection = ({ title, values }: { title: string; values: ReactNode[] }) => (
+    <div className="report-text-panel break-inside-avoid">
+        <SectionHeader title={title} />
+        <div className="report-text-content">
+            {values.length > 0
+                ? values.map((value, index) => <p key={index}>{value}</p>)
+                : <p className="report-text-empty">Sem observações registradas.</p>}
+        </div>
     </div>
 );
 
@@ -46,72 +79,23 @@ const IconStatCard = ({ icon, label, value, description, tone = 'slate' }: IconS
     </div>
 );
 
-const MiniBarChart = ({ title, items }: { title: string; items: ChartItem[] }) => {
-    const maxValue = Math.max(1, ...items.map(item => item.value));
-
-    return (
-        <div className="report-chart">
-            <div className="report-chart-title"><BarChart3 className="w-3.5 h-3.5" /> {title}</div>
-            <div className="report-chart-rows">
-                {items.map(item => {
-                    const width = Math.max(6, Math.round((item.value / maxValue) * 100));
-                    return (
-                        <div key={item.label} className="report-chart-row">
-                            <span className="report-chart-label">{item.label}</span>
-                            <span className="report-chart-track">
-                                <span className={`report-chart-bar report-chart-bar-${item.tone || 'slate'}`} style={{ width: `${width}%` }} />
-                            </span>
-                            <strong className="report-chart-value">{item.value}</strong>
-                        </div>
-                    );
-                })}
-            </div>
-        </div>
-    );
-};
-
-const AnnualComparisonCharts = ({ rows, years }: { rows: Extract<RawMetricRow, { type: 'yearly' }>[]; years: string[] }) => {
-    const chartRows = rows
-        .map(row => ({
-            label: row.label,
-            items: years
-                .map(year => ({ label: year, value: parseDisplayNumber(row.valuesByYear[year]) }))
-                .filter((item): item is { label: string; value: number } => item.value !== null)
-        }))
-        .filter(row => row.items.length > 1)
-        .slice(0, 4);
-
-    if (chartRows.length === 0) return null;
-
-    return (
-        <div className="annual-chart-grid report-block">
-            {chartRows.map(row => (
-                <MiniBarChart
-                    key={row.label}
-                    title={row.label}
-                    items={row.items.map(item => ({ ...item, tone: 'khaki' }))}
-                />
-            ))}
-        </div>
-    );
-};
-
 const parseDisplayNumber = (value: ReactNode) => {
     if (typeof value !== 'string') return null;
     if (value.includes('%')) return null;
-    const numericValue = Number(value.replace(/\./g, '').replace(',', '.').replace('%', '').trim());
+    const numericValue = Number(value.replace(/R\$/gi, '').replace(/\./g, '').replace(',', '.').replace('%', '').trim());
     return Number.isFinite(numericValue) ? numericValue : null;
 };
 
 const formatDisplayNumber = (value: number) => value.toLocaleString('pt-BR');
 
-const getMetricTotal = (valuesByYear: Record<string, ReactNode>, years: string[]) => {
+const getMetricTotal = (valuesByYear: Record<string, ReactNode>, years: string[], isCurrency = false) => {
     const values = years.map(year => valuesByYear[year]).filter(value => value !== undefined && value !== null && value !== '-');
     if (values.length === 0) return '-';
 
     const numericValues = values.map(parseDisplayNumber);
     if (numericValues.length > 1 && numericValues.every(value => value !== null)) {
-        return formatDisplayNumber(numericValues.reduce((sum, value) => sum + (value ?? 0), 0));
+        const total = numericValues.reduce((sum, value) => sum + (value ?? 0), 0);
+        return isCurrency ? formatBrazilianNumber(total, true) : formatDisplayNumber(total);
     }
 
     return values[0];
@@ -119,22 +103,22 @@ const getMetricTotal = (valuesByYear: Record<string, ReactNode>, years: string[]
 
 const MetricValue = ({ value, label }: { value: ReactNode; label: ReactNode }) => {
     const numericValue = parseDisplayNumber(value);
-    const isPercentage = typeof value === 'string' && value.includes('%');
+    const isCurrency = typeof value === 'string' && value.includes('R$');
+    const valueLength = typeof value === 'string' ? value.replace(/\s/g, '').length : 0;
+    const compactSizeClass = valueLength >= (isCurrency ? 17 : 20)
+        ? 'report-metric-value-xlong'
+        : valueLength >= (isCurrency ? 13 : 16)
+            ? 'report-metric-value-long'
+            : '';
     const toneClass = getValueToneClass(value, 1, label);
-    const barWidth = numericValue === null ? 0 : Math.min(Math.abs(numericValue), 100);
 
     if (numericValue === null || value === '-') {
         return <span className="report-value-neutral">{value}</span>;
     }
 
     return (
-        <span className={`report-value-pill ${toneClass}`}>
-            <span className="report-value-number">{value}</span>
-            {isPercentage && (
-                <span className="report-value-bar" aria-hidden="true">
-                    <span style={{ width: `${barWidth}%` }} />
-                </span>
-            )}
+        <span className={`report-metric-value ${isCurrency ? 'report-metric-value-currency' : ''} ${compactSizeClass} ${toneClass}`}>
+            {value}
         </span>
     );
 };
@@ -149,6 +133,7 @@ const getValueToneClass = (cell: ReactNode, columnIndex: number, rowLabel: React
     if (!shouldHighlightBalance) return 'text-slate-800';
 
     const normalized = cell
+        .replace(/R\$/gi, '')
         .replace(/\./g, '')
         .replace(',', '.')
         .replace('%', '')
@@ -198,19 +183,21 @@ const normalizeMetricBaseName = (value: string, yearToRemove?: string) => {
 
 const getMetricGroupKey = (value: string) => normalizeMetricBaseName(value).toLowerCase();
 
-const getMetricLabelWithoutYear = (fieldName: string, fallback = 'Consolidado') => {
+const getMetricLabelWithoutYear = (fieldName: string, fallback = 'Total') => {
     const normalized = normalizeMetricBaseName(fieldName);
     return normalized || fallback;
 };
 
 const getYearFromText = (value: string) => value.match(/\b(19|20)\d{2}\b/)?.[0] ?? null;
 
-const getCategoryLabel = (group: { categoryTitle?: string | null }) => group.categoryTitle?.trim() || 'Geral';
 const formatCollectionValue = (field: any, value: any) => {
     if (!value) return null;
 
     if (field?.type === 'number' || field?.type === 'calculated') {
         return value.valueNumber !== null && value.valueNumber !== undefined ? Number(value.valueNumber).toLocaleString('pt-BR') : null;
+    }
+    if (field?.type === 'currency') {
+        return value.valueNumber !== null && value.valueNumber !== undefined ? formatBrazilianNumber(Number(value.valueNumber), true) : null;
     }
     if (field?.type === 'percentage') {
         return value.valueNumber !== null && value.valueNumber !== undefined ? `${Number(value.valueNumber).toLocaleString('pt-BR')}%` : null;
@@ -223,16 +210,69 @@ const formatCollectionValue = (field: any, value: any) => {
     return value.valueText || null;
 };
 
-const CompactTable = ({ headers, rows, colWidths, variant = 'default' }: { headers: string[]; rows: TableRow[]; colWidths?: string[]; variant?: 'default' | 'metrics' | 'collection' }) => (
+const getCollectionColumnWidths = (collectionFields: any[]) => {
+    if (collectionFields.length === 0) return [];
+
+    const weights = collectionFields.map(field => {
+        if (field.type === 'currency') return 1.35;
+        if (['number', 'percentage', 'calculated'].includes(field.type)) return 0.85;
+        if (field.type === 'textarea') return 2.6;
+        if (isDateOrPeriodField(field.name)) return 1;
+        return 1.8;
+    });
+    const totalWeight = weights.reduce((total, weight) => total + weight, 0);
+
+    return weights.map(weight => `${((weight / totalWeight) * 100).toFixed(2)}%`);
+};
+
+const HIGHLIGHT_CLASS_BY_COLOR: Record<ReportHighlightColor, string> = {
+    khaki: 'report-highlight-khaki',
+    blue: 'report-highlight-blue',
+    green: 'report-highlight-green',
+    amber: 'report-highlight-amber',
+    red: 'report-highlight-red'
+};
+
+const getCellHighlightClass = (highlightRules: ReportTableHighlightRule[], rowIndex: number, columnIndex: number) => {
+    const reversedRules = [...highlightRules].reverse();
+    const rule = reversedRules.find(item => item.target === 'cell' && item.rowIndex === rowIndex && item.columnIndex === columnIndex)
+        ?? reversedRules.find(item => item.target === 'row' && item.rowIndex === rowIndex)
+        ?? reversedRules.find(item => item.target === 'column' && item.columnIndex === columnIndex);
+
+    return rule ? HIGHLIGHT_CLASS_BY_COLOR[rule.color] : '';
+};
+
+const getColumnHighlightClass = (highlightRules: ReportTableHighlightRule[], columnIndex: number) => {
+    const rule = [...highlightRules].reverse().find(item => item.target === 'column' && item.columnIndex === columnIndex);
+    return rule ? HIGHLIGHT_CLASS_BY_COLOR[rule.color] : '';
+};
+
+const CompactTable = ({
+    headers,
+    rows,
+    colWidths,
+    variant = 'default',
+    highlightRules = [],
+    financial = false,
+    narrative = false
+}: {
+    headers: string[];
+    rows: TableRow[];
+    colWidths?: string[];
+    variant?: 'default' | 'metrics';
+    highlightRules?: ReportTableHighlightRule[];
+    financial?: boolean;
+    narrative?: boolean;
+}) => (
     <div className="report-table mb-5 overflow-hidden border border-slate-300 rounded-lg">
-        <table className={`w-full text-left border-collapse bg-white table-fixed report-table-${variant}`}>
+        <table className={`w-full text-left border-collapse bg-white table-fixed report-table-${variant} ${financial ? 'report-table-financial' : ''} ${narrative ? 'report-table-narrative' : ''}`}>
             <thead>
                 <tr className="bg-slate-900 text-white">
                     {headers.map((h, i) => (
                         <th 
                             key={i} 
                             style={colWidths ? { width: colWidths[i] } : {}}
-                            className="px-3 py-2 text-[10px] font-black uppercase tracking-wide border-r border-white/10 last:border-0"
+                            className={`px-3 py-2 text-[10px] font-black uppercase tracking-wide border-r border-white/10 last:border-0 ${getColumnHighlightClass(highlightRules, i)}`}
                         >
                             {h}
                         </th>
@@ -251,10 +291,11 @@ const CompactTable = ({ headers, rows, colWidths, variant = 'default' }: { heade
                         );
                     }
 
+                    const dataRowIndex = rows.slice(0, i).filter(previousRow => Array.isArray(previousRow)).length;
                     return (
                         <tr key={i} className="report-table-row hover:bg-slate-50 transition-colors">
                             {row.map((cell, j) => (
-                                <td key={j} className={`px-3 py-2 text-[11px] font-bold border-r border-slate-100 last:border-0 ${j === 0 ? 'bg-slate-50/40 text-slate-900' : getValueToneClass(cell, j, row[0])}`}>
+                                <td key={j} className={`px-3 py-2 text-[11px] font-bold border-r border-slate-100 last:border-0 ${j === 0 ? 'bg-slate-50/40 text-slate-900' : getValueToneClass(cell, j, row[0])} ${getCellHighlightClass(highlightRules, dataRowIndex, j)}`}>
                                     {cell}
                                 </td>
                             ))}
@@ -270,13 +311,35 @@ const CompactTable = ({ headers, rows, colWidths, variant = 'default' }: { heade
 // RENDERIZADOR PRINCIPAL
 // ==================================================================================
 
-export default function ReportPdfRenderer({ selectedUnits, selectedGroups, reportCategoryConfig }: ReportPdfRendererProps) {
-    const { units, dataGroups, fields, entries, getValuesForEntry, collectionItems, getValuesForItem } = useAuth();
+export default function ReportPdfRenderer({ selectedUnits, selectedGroups, reportCategoryConfig, reportSectionsConfig, fontSize = 'standard' }: ReportPdfRendererProps) {
+    const { units, dataGroups, fields, entries, getValuesForEntry, collectionItems, getValuesForItem, users } = useAuth();
     const { settings } = useSettings();
+    const showExecutiveSummary = reportSectionsConfig?.showExecutiveSummary ?? true;
+    const showSubjectMap = reportSectionsConfig?.showSubjectMap ?? true;
+    const showCoverPage = showExecutiveSummary || showSubjectMap;
 
     const logoUrl = settings?.logo_path ? getPublicUploadUrl(settings.logo_path) : null;
-    const unitsToRender = useMemo(() => units.filter(u => selectedUnits.includes(u.id)), [units, selectedUnits]);
-    const getRuntimeCategoryLabel = (group: { id: string; categoryTitle?: string | null }) => reportCategoryConfig?.groupAssignments[group.id]?.trim() || getCategoryLabel(group);
+    const unitsToRender = useMemo(() => {
+        const unitOrder = reportCategoryConfig?.unitOrder ?? [];
+        const getUnitOrder = (unitId: string) => {
+            const configuredIndex = unitOrder.indexOf(unitId);
+            return configuredIndex >= 0 ? configuredIndex : 9999;
+        };
+
+        return units
+            .filter(unit => selectedUnits.includes(unit.id))
+            .sort((a, b) => getUnitOrder(a.id) - getUnitOrder(b.id) || (a.order_index ?? 999) - (b.order_index ?? 999));
+    }, [reportCategoryConfig?.unitOrder, selectedUnits, units]);
+    const getRuntimeCategoryLabel = (group: { id: string; unitId: string; categoryTitle?: string | null }) => {
+        const unit = units.find(item => item.id === group.unitId);
+        return reportCategoryConfig?.groupAssignments[unit?.id || '']?.trim()
+            || unit?.reportCategoryTitle?.trim()
+            || group.categoryTitle?.trim()
+            || 'Geral';
+    };
+    const getRuntimeCategoryFallbackOrder = (group: { unitId: string; categoryOrder?: number }) => (
+        units.find(unit => unit.id === group.unitId)?.reportCategoryOrder ?? group.categoryOrder ?? 999
+    );
     const getRuntimeCategoryOrder = (category: string, fallback = 999) => {
         const configuredIndex = reportCategoryConfig?.categoryOrder.findIndex(item => item === category) ?? -1;
         return configuredIndex >= 0 ? configuredIndex + 1 : fallback;
@@ -285,45 +348,33 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
         const configuredIndex = reportCategoryConfig?.groupOrder?.findIndex(item => item === groupId) ?? -1;
         return configuredIndex >= 0 ? configuredIndex + 1 : fallback;
     };
-    const getRuntimeSectionLabel = (group: { id: string; title: string; categoryTitle?: string | null }) => {
-        return group.title;
-    };
     const getSortedGroups = (groups: typeof dataGroups) => [...groups]
-        .sort((a, b) => getRuntimeCategoryOrder(getRuntimeCategoryLabel(a), a.categoryOrder ?? 999) - getRuntimeCategoryOrder(getRuntimeCategoryLabel(b), b.categoryOrder ?? 999) || getRuntimeGroupOrder(a.id, a.order) - getRuntimeGroupOrder(b.id, b.order) || a.order - b.order);
+        .sort((a, b) => getRuntimeCategoryOrder(getRuntimeCategoryLabel(a), getRuntimeCategoryFallbackOrder(a)) - getRuntimeCategoryOrder(getRuntimeCategoryLabel(b), getRuntimeCategoryFallbackOrder(b)) || getRuntimeGroupOrder(a.id, a.order) - getRuntimeGroupOrder(b.id, b.order) || a.order - b.order);
     const selectedDataGroups = getSortedGroups(dataGroups.filter(group => selectedGroups.includes(group.id)));
     const reportCategories = Array.from(new Set(selectedDataGroups.map(getRuntimeCategoryLabel)))
         .sort((a, b) => getRuntimeCategoryOrder(a) - getRuntimeCategoryOrder(b));
-    const categoryBreakdown = reportCategories.map(category => {
-        const categoryGroups = selectedDataGroups.filter(group => getRuntimeCategoryLabel(group) === category);
-        const categoryUnitIds = Array.from(new Set(categoryGroups.map(group => group.unitId)));
-        const categoryCollections = collectionItems.filter(item => categoryGroups.some(group => group.id === item.dataGroupId) && item.status !== 'archived').length;
-
-        return {
-            label: category,
-            groups: categoryGroups.length,
-            units: categoryUnitIds.length,
-            collections: categoryCollections,
-            total: categoryGroups.length + categoryCollections
-        };
-    });
-
     const executiveSummary = useMemo(() => {
         let totalRegistros = 0;
         let totalOcorrencias = 0;
-        const unitBreakdown = unitsToRender.map(unit => {
+        const selectedUpdates = [
+            ...entries
+                .filter(entry => selectedUnits.includes(entry.unitId) && selectedGroups.includes(entry.dataGroupId))
+                .map(entry => ({ updatedAt: entry.updatedAt, updatedBy: entry.updatedBy })),
+            ...collectionItems
+                .filter(item => selectedUnits.includes(item.unitId) && selectedGroups.includes(item.dataGroupId) && item.status !== 'archived')
+                .map(item => ({ updatedAt: item.updatedAt, updatedBy: item.updatedBy }))
+        ].filter(item => item.updatedAt);
+        const latestUpdate = selectedUpdates
+            .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
+        const latestUpdateDate = latestUpdate ? new Date(latestUpdate.updatedAt) : null;
+        const latestUpdateUser = latestUpdate?.updatedBy
+            ? users.find(item => item.id === latestUpdate.updatedBy)?.name || null
+            : null;
+        unitsToRender.forEach(unit => {
             const unitRegistros = entries.filter(e => e.unitId === unit.id && selectedGroups.includes(e.dataGroupId)).length;
             const unitOcorrencias = collectionItems.filter(i => i.unitId === unit.id && selectedGroups.includes(i.dataGroupId) && i.status !== 'archived').length;
-            const unitGroups = dataGroups.filter(group => group.unitId === unit.id && selectedGroups.includes(group.id)).length;
             totalRegistros += unitRegistros;
             totalOcorrencias += unitOcorrencias;
-
-            return {
-                label: unit.name,
-                groups: unitGroups,
-                registros: unitRegistros,
-                ocorrencias: unitOcorrencias,
-                total: unitGroups + unitRegistros + unitOcorrencias
-            };
         });
 
         return {
@@ -333,14 +384,18 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
             groupsCount: dataGroups.filter(group => selectedGroups.includes(group.id)).length,
             totalRegistros,
             totalOcorrencias,
-            unitBreakdown
+            lastUpdate: latestUpdateDate ? {
+                date: latestUpdateDate.toLocaleDateString('pt-BR'),
+                time: latestUpdateDate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+                author: latestUpdateUser || 'Responsável não identificado'
+            } : null
         };
-    }, [unitsToRender, entries, collectionItems, dataGroups, selectedGroups]);
+    }, [unitsToRender, entries, collectionItems, dataGroups, selectedGroups, selectedUnits, users]);
 
     return (
-        <div className="bg-white text-black font-sans w-full print:max-w-none">
+        <div className={`report-pdf-root bg-white text-black font-sans w-full print:max-w-none ${fontSize === 'large' ? 'report-font-large' : ''}`}>
             {/* PÁGINA 1: RESUMO EXECUTIVO COMPACTO */}
-            <div className="p-8 flex flex-col page-break-after-always min-h-[250mm]">
+            {showCoverPage && <div className="p-8 flex flex-col page-break-after-always min-h-[250mm]">
                 <div className="flex justify-between items-center border-b-2 border-slate-900 pb-2 mb-6">
                     <div className="flex items-center gap-4">
                         {logoUrl && (
@@ -358,7 +413,7 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                     </div>
                 </div>
 
-                <div className="mb-5">
+                {showExecutiveSummary && <div className="mb-5">
                     <SectionHeader title="RESUMO EXECUTIVO" />
                     <div className="executive-stat-grid">
                         <IconStatCard
@@ -390,36 +445,10 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                             tone="amber"
                         />
                     </div>
-                </div>
+                </div>}
 
-                {executiveSummary.unitBreakdown.length > 0 && (
-                    <div className="mb-5">
-                        <SectionHeader title="DISTRIBUIÇÃO POR UNIDADE" />
-                        <MiniBarChart
-                            title="Volume de informações no documento"
-                            items={executiveSummary.unitBreakdown.map(item => ({
-                                label: item.label,
-                                value: item.total,
-                                tone: item.ocorrencias > item.registros ? 'amber' : 'khaki'
-                            }))}
-                        />
-                    </div>
-                )}
-
-                <div className="mb-5">
+                {showSubjectMap && <div className="mb-5">
                     <SectionHeader title="MAPA DE ASSUNTOS" />
-                    {categoryBreakdown.length > 0 && (
-                        <div className="mb-3">
-                            <MiniBarChart
-                                title="Distribuição por categoria do relatório"
-                                items={categoryBreakdown.map((item, index) => ({
-                                    label: item.label,
-                                    value: item.total,
-                                    tone: index % 3 === 0 ? 'khaki' : index % 3 === 1 ? 'slate' : 'amber'
-                                }))}
-                            />
-                        </div>
-                    )}
                     <div className="report-reading-map">
                         {unitsToRender.map(unit => {
                             const unitGroups = selectedDataGroups.filter(group => group.unitId === unit.id);
@@ -428,10 +457,8 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                             return (
                                 <div key={unit.id} className="report-reading-item">
                                     <strong><MapPinned className="w-3.5 h-3.5" /> {unit.name}</strong>
-                                    <span>{categoryNames.map(category => {
-                                        const titles = unitGroups.filter(group => getRuntimeCategoryLabel(group) === category).map(group => group.title).join(', ');
-                                        return `${category}: ${titles}`;
-                                    }).join(' • ') || 'Sem grupos selecionados'}</span>
+                                    <span>{categoryNames.join(' • ') || 'Sem categoria selecionada'}</span>
+                                    {unit.responsibleSector && <em>Setor responsável: {unit.responsibleSector}</em>}
                                 </div>
                             );
                         })}
@@ -440,12 +467,37 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                         <span><CalendarDays className="w-3.5 h-3.5" /> Documento gerado em</span>
                         <strong>{executiveSummary.date} às {executiveSummary.time}</strong>
                     </div>
-                </div>
+                    <div className="report-emission-box report-last-update-box">
+                        <span><Clock className="w-3.5 h-3.5" /> Última atualização</span>
+                        <strong>
+                            {executiveSummary.lastUpdate
+                                ? `${executiveSummary.lastUpdate.date} às ${executiveSummary.lastUpdate.time} - ${executiveSummary.lastUpdate.author}`
+                            : 'Sem atualização registrada'}
+                        </strong>
+                    </div>
+                </div>}
+
+                {!showSubjectMap && (
+                    <div className="mb-5">
+                        <div className="report-emission-box">
+                            <span><CalendarDays className="w-3.5 h-3.5" /> Documento gerado em</span>
+                            <strong>{executiveSummary.date} às {executiveSummary.time}</strong>
+                        </div>
+                        <div className="report-emission-box report-last-update-box">
+                            <span><Clock className="w-3.5 h-3.5" /> Última atualização</span>
+                            <strong>
+                                {executiveSummary.lastUpdate
+                                    ? `${executiveSummary.lastUpdate.date} às ${executiveSummary.lastUpdate.time} - ${executiveSummary.lastUpdate.author}`
+                                    : 'Sem atualização registrada'}
+                            </strong>
+                        </div>
+                    </div>
+                )}
 
                 <div className="mt-auto pt-4 border-t border-slate-100 text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em] italic">
                     CONFIDENCIAL — USO EXCLUSIVO
                 </div>
-            </div>
+            </div>}
 
             {/* PÁGINAS DE DETALHAMENTO TOTALMENTE EM TABELAS */}
             <div className="p-8 space-y-6">
@@ -453,7 +505,6 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                     const unitsForCategory = unitsToRender.filter(unit =>
                         selectedDataGroups.some(group => group.unitId === unit.id && getRuntimeCategoryLabel(group) === category)
                     );
-                    const categoryGroups = selectedDataGroups.filter(group => getRuntimeCategoryLabel(group) === category);
                     if (unitsForCategory.length === 0) return null;
 
                     return (
@@ -462,7 +513,7 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                 <span>{String(categoryIndex + 1).padStart(2, '0')}</span>
                                 <div>
                                     <h2>{category}</h2>
-                                    <p>{unitsForCategory.length} tópico(s) completo(s) · {categoryGroups.length} seção(ões)</p>
+                                    <p>{unitsForCategory.length} tópico(s) completo(s)</p>
                                 </div>
                             </div>
 
@@ -473,9 +524,25 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                     if (groupsForUnit.length === 0) return null;
 
                     const unitEntries = entries.filter(e => e.unitId === unit.id);
-                    const metricGroupsForUnit = groupsForUnit.filter(group => group.mode !== 'collection');
-                    const collectionGroupsForUnit = groupsForUnit.filter(group => group.mode === 'collection');
-                    const preserveOriginalMetrics = [unit.name, unit.full_name || ''].some(name => /graer/i.test(name));
+                    const textGroupsForUnit = groupsForUnit.filter(group => group.mode === 'snapshot' && group.reportLayout === 'text');
+                    const groupIdsForUnit = groupsForUnit.map(group => group.id);
+                    const latestUnitUpdate = [
+                        ...unitEntries
+                            .filter(entry => groupIdsForUnit.includes(entry.dataGroupId))
+                            .map(entry => ({ updatedAt: entry.updatedAt, updatedBy: entry.updatedBy })),
+                        ...collectionItems
+                            .filter(item => item.unitId === unit.id && groupIdsForUnit.includes(item.dataGroupId) && item.status !== 'archived')
+                            .map(item => ({ updatedAt: item.updatedAt, updatedBy: item.updatedBy }))
+                    ]
+                        .filter(item => item.updatedAt)
+                        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
+                    const latestUnitUpdateDate = latestUnitUpdate ? new Date(latestUnitUpdate.updatedAt) : null;
+                    const latestUnitUpdateAuthor = latestUnitUpdate?.updatedBy
+                        ? users.find(item => item.id === latestUnitUpdate.updatedBy)?.name || 'Responsável não identificado'
+                        : 'Responsável não identificado';
+                    const getTableHighlights = (groupId?: string) =>
+                        groupId ? (reportCategoryConfig?.tableHighlights ?? []).filter(rule => rule.groupId === groupId) : [];
+                    const preserveOriginalMetrics = /graer|grupamento aéreo/i.test(unit.name);
                     const getVal = (field: any, snapshotValues: any[]) => {
                         const fv = snapshotValues.find(v => v.fieldId === field.id);
                         let val = fv ? fv.value : null;
@@ -484,42 +551,92 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                 acc[curr.fieldId] = curr.value;
                                 return acc;
                             }, {} as Record<string, any>);
-                            const calculated = calculateFieldValue(field, allValues, fields);
+                            const calculated = calculateFieldValue(field, allValues, fields, true);
                             if (calculated !== null) val = calculated;
                         }
                         if (val === null || val === undefined || val === '') return '-';
                         if (field.type === 'percentage') return `${Number(val).toLocaleString('pt-BR')}%`;
+                        if (field.type === 'currency') return formatBrazilianNumber(Number(val), true);
                         if (field.type === 'number' || field.type === 'calculated') return Number(val).toLocaleString('pt-BR');
                         return val;
                     };
+                    const textSectionsForUnit = textGroupsForUnit.map(group => {
+                        const groupEntry = unitEntries.find(entry => entry.dataGroupId === group.id && !entry.referenceYear)
+                            ?? unitEntries.find(entry => entry.dataGroupId === group.id);
+                        const snapshotValues = groupEntry ? getValuesForEntry(groupEntry.id) : [];
+                        const values = fields
+                            .filter(field => field.dataGroupId === group.id && field.isActive && field.type !== 'image')
+                            .sort((a, b) => a.order - b.order)
+                            .map(field => getVal(field, snapshotValues))
+                            .filter(value => value !== '-');
 
-                    const metricData = metricGroupsForUnit.reduce<{
+                        return { group, values };
+                    });
+
+                    const metricData = groupsForUnit.reduce<{
                         years: string[];
                         rows: RawMetricRow[];
                         pendingYearBlock: null | {
+                            groupId: string;
+                            title: string;
                             years: string[];
-                            rowsByLabel: Map<string, { label: string; valuesByYear: Record<string, ReactNode>; order: number }>;
+                            rowsByLabel: Map<string, { label: string; valuesByYear: Record<string, ReactNode>; order: number; showTotal: boolean; isCurrency: boolean }>;
                         };
                     }>((acc, group) => {
                         const flushYearBlock = () => {
                             if (!acc.pendingYearBlock || acc.pendingYearBlock.rowsByLabel.size === 0) return;
 
                             acc.rows.push(
-                                { type: 'section', label: `Comparativo por ano (${acc.pendingYearBlock.years.sort().join(' / ')})` },
+                                { type: 'section', label: acc.pendingYearBlock.title, groupId: acc.pendingYearBlock.groupId },
                                 ...Array.from(acc.pendingYearBlock.rowsByLabel.values())
                                     .sort((a, b) => a.order - b.order)
-                                    .map(item => ({ type: 'yearly', label: item.label, valuesByYear: item.valuesByYear } as RawMetricRow))
+                                    .map(item => ({ type: 'yearly', label: item.label, valuesByYear: item.valuesByYear, showTotal: item.showTotal, isCurrency: item.isCurrency } as RawMetricRow))
                             );
                             acc.pendingYearBlock = null;
                         };
 
+                        if (group.mode === 'collection' || group.reportLayout === 'text') {
+                            flushYearBlock();
+                            return acc;
+                        }
+
                         const groupFields = fields.filter(f => f.dataGroupId === group.id && f.isActive && f.type !== 'image').sort((a, b) => a.order - b.order);
                         if (groupFields.length === 0) return acc;
+
+                        if (group.updateFrequency === 'yearly') {
+                            flushYearBlock();
+                            const groupEntriesByYear = new Map(
+                                unitEntries
+                                    .filter(entry => entry.dataGroupId === group.id && entry.referenceYear)
+                                    .map(entry => [String(entry.referenceYear), entry])
+                            );
+                            const legacyEntry = unitEntries.find(entry => entry.dataGroupId === group.id && !entry.referenceYear);
+                            const currentYear = String(CURRENT_REPORT_YEAR);
+                            if (legacyEntry && !groupEntriesByYear.has(currentYear)) {
+                                groupEntriesByYear.set(currentYear, legacyEntry);
+                            }
+
+                            acc.rows.push(
+                                { type: 'section', label: group.title, groupId: group.id },
+                                ...groupFields.map(field => ({
+                                    type: 'yearly' as const,
+                                    label: field.name,
+                                    valuesByYear: Object.fromEntries(REPORT_YEARS.map(year => {
+                                        const entry = groupEntriesByYear.get(year);
+                                        const values = entry ? getValuesForEntry(entry.id) : [];
+                                        return [year, entry ? getVal(field, values) : '-'];
+                                    })),
+                                    showTotal: group.showTotal && ['number', 'currency', 'percentage', 'calculated'].includes(field.type),
+                                    isCurrency: field.type === 'currency'
+                                }))
+                            );
+                            return acc;
+                        }
 
                         const groupEntry = unitEntries.find(e => e.dataGroupId === group.id);
                         const snapshotValues = groupEntry ? getValuesForEntry(groupEntry.id) : [];
                         const groupYear = preserveOriginalMetrics ? null : getYearFromText(group.title);
-                        const yearlyGroups = new Map<string, { label: string; valuesByYear: Record<string, ReactNode>; order: number }>();
+                        const yearlyGroups = new Map<string, { label: string; valuesByYear: Record<string, ReactNode>; order: number; showTotal: boolean; isCurrency: boolean }>();
                         const regularRows: { order: number; row: ReactNode[] }[] = [];
 
                         groupFields.forEach((field, index) => {
@@ -531,20 +648,24 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                     acc.years.push(groupYear);
                                 }
                                 if (!acc.pendingYearBlock) {
-                                    acc.pendingYearBlock = { years: [], rowsByLabel: new Map() };
+                                    acc.pendingYearBlock = { groupId: group.id, title: group.title, years: [], rowsByLabel: new Map() };
                                 }
                                 if (!acc.pendingYearBlock.years.includes(groupYear)) {
                                     acc.pendingYearBlock.years.push(groupYear);
                                 }
 
-                                const fieldBaseName = yearInfo?.baseName || getMetricLabelWithoutYear(field.name, group.title);
+                                const fieldBaseName = yearInfo?.baseName || getMetricLabelWithoutYear(field.name, unit.name);
                                 const fieldKey = getMetricGroupKey(fieldBaseName) || fieldBaseName.toLowerCase();
                                 const current = acc.pendingYearBlock.rowsByLabel.get(fieldKey) ?? {
                                     label: fieldBaseName,
                                     valuesByYear: {},
-                                    order: group.order * 1000 + index
+                                    order: group.order * 1000 + index,
+                                    showTotal: ['number', 'currency', 'percentage', 'calculated'].includes(field.type),
+                                    isCurrency: field.type === 'currency'
                                 };
                                 current.valuesByYear[groupYear] = value;
+                                current.showTotal = current.showTotal || ['number', 'currency', 'percentage', 'calculated'].includes(field.type);
+                                current.isCurrency = current.isCurrency || field.type === 'currency';
                                 current.order = Math.min(current.order, group.order * 1000 + index);
                                 acc.pendingYearBlock.rowsByLabel.set(fieldKey, current);
                                 return;
@@ -559,14 +680,18 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                 acc.years.push(yearInfo.year);
                             }
 
-                            const fieldBaseName = yearInfo.baseName || getMetricLabelWithoutYear(field.name, group.title);
+                            const fieldBaseName = yearInfo.baseName || getMetricLabelWithoutYear(field.name, unit.name);
                             const fieldKey = getMetricGroupKey(fieldBaseName) || fieldBaseName.toLowerCase();
                             const current = yearlyGroups.get(fieldKey) ?? {
                                 label: fieldBaseName,
                                 valuesByYear: {},
-                                order: index
+                                order: index,
+                                showTotal: ['number', 'currency', 'percentage', 'calculated'].includes(field.type),
+                                isCurrency: field.type === 'currency'
                             };
                             current.valuesByYear[yearInfo.year] = value;
+                            current.showTotal = current.showTotal || ['number', 'currency', 'percentage', 'calculated'].includes(field.type);
+                            current.isCurrency = current.isCurrency || field.type === 'currency';
                             current.order = Math.min(current.order, index);
                             yearlyGroups.set(fieldKey, current);
                         });
@@ -578,14 +703,14 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                             ...regularRows,
                             ...Array.from(yearlyGroups.values()).map(item => ({
                                 order: item.order,
-                                row: { type: 'yearly', label: item.label, valuesByYear: item.valuesByYear } as RawMetricRow
+                                row: { type: 'yearly', label: item.label, valuesByYear: item.valuesByYear, showTotal: item.showTotal, isCurrency: item.isCurrency } as RawMetricRow
                             }))
                         ].sort((a, b) => a.order - b.order);
 
                         if (groupRows.length === 0) return acc;
 
                         acc.rows.push(
-                            { type: 'section', label: getRuntimeSectionLabel(group) },
+                            { type: 'section', label: group.title, groupId: group.id },
                             ...groupRows.map(item => item.row)
                         );
 
@@ -594,23 +719,24 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
 
                     if (metricData.pendingYearBlock && metricData.pendingYearBlock.rowsByLabel.size > 0) {
                         metricData.rows.push(
-                            { type: 'section', label: `Comparativo por ano (${metricData.pendingYearBlock.years.sort().join(' / ')})` },
+                            { type: 'section', label: metricData.pendingYearBlock.title, groupId: metricData.pendingYearBlock.groupId },
                             ...Array.from(metricData.pendingYearBlock.rowsByLabel.values())
                                 .sort((a, b) => a.order - b.order)
-                                .map(item => ({ type: 'yearly', label: item.label, valuesByYear: item.valuesByYear } as RawMetricRow))
+                                .map(item => ({ type: 'yearly', label: item.label, valuesByYear: item.valuesByYear, showTotal: item.showTotal, isCurrency: item.isCurrency } as RawMetricRow))
                         );
                     }
 
                     const metricTableBlocks: {
                         id: string;
+                        groupId?: string;
                         headers: string[];
                         rows: TableRow[];
                         colWidths: string[];
-                        annualRows: Extract<RawMetricRow, { type: 'yearly' }>[];
-                        years: string[];
+                        financial: boolean;
                     }[] = [];
 
                     let activeSection: string | null = null;
+                    let activeSectionGroupId: string | undefined;
                     let regularRows: ReactNode[][] = [];
                     let yearlyRows: Extract<RawMetricRow, { type: 'yearly' }>[] = [];
 
@@ -618,25 +744,27 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                         if (regularRows.length > 0) {
                             metricTableBlocks.push({
                                 id: `${activeSection || 'indicadores'}-regular-${metricTableBlocks.length}`,
-                                headers: ['Indicador', 'Consolidado'],
+                                groupId: activeSectionGroupId,
+                                headers: ['Indicador', 'Total'],
                                 rows: [
                                     ...(activeSection ? [{ type: 'section' as const, label: activeSection }] : []),
                                     ...regularRows.map(row => [row[0], <MetricValue key={`${String(row[0])}-value`} value={row[1] ?? '-'} label={row[0]} />] as ReactNode[])
                                 ],
                                 colWidths: ['34%', '66%'],
-                                annualRows: [],
-                                years: []
+                                financial: false
                             });
                         }
 
                         if (yearlyRows.length > 0) {
                             const blockYears = Array.from(new Set(yearlyRows.flatMap(row => Object.keys(row.valuesByYear)))).sort();
                             const showYearColumns = blockYears.length > 1;
+                            const showTotalColumn = yearlyRows.some(row => row.showTotal);
+                            const hasCurrencyValues = yearlyRows.some(row => row.isCurrency);
                             const headers = showYearColumns
-                                ? ['Indicador', ...blockYears.map(year => `Ano ${year}`), 'Consolidado']
-                                : ['Indicador', 'Consolidado'];
+                                ? ['Indicador', ...blockYears.map(year => `Ano ${year}`), ...(showTotalColumn ? ['Total'] : [])]
+                                : ['Indicador', 'Total'];
                             const rows = yearlyRows.map<TableRow>(row => {
-                                const total = getMetricTotal(row.valuesByYear, blockYears);
+                                const total = row.showTotal ? getMetricTotal(row.valuesByYear, blockYears, row.isCurrency) : '-';
                                 if (!showYearColumns) {
                                     return [row.label, <MetricValue key={`${row.label}-total`} value={total} label={row.label} />];
                                 }
@@ -644,25 +772,29 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                 return [
                                     row.label,
                                     ...blockYears.map(year => <MetricValue key={`${row.label}-${year}`} value={row.valuesByYear[year] ?? '-'} label={row.label} />),
-                                    <MetricValue key={`${row.label}-total`} value={total} label={row.label} />
+                                    ...(showTotalColumn ? [<MetricValue key={`${row.label}-total`} value={total} label={row.label} />] : [])
                                 ];
                             });
 
                             metricTableBlocks.push({
                                 id: `${activeSection || 'comparativo'}-annual-${metricTableBlocks.length}`,
+                                groupId: activeSectionGroupId,
                                 headers,
                                 rows: [
                                     ...(activeSection ? [{ type: 'section' as const, label: activeSection }] : []),
                                     ...rows
                                 ],
                                 colWidths: headers.map((_, index) => {
+                                    if (hasCurrencyValues && showYearColumns) {
+                                        const valueColumnWidth = 84 / (headers.length - 1);
+                                        return index === 0 ? '16%' : `${valueColumnWidth.toFixed(2)}%`;
+                                    }
                                     if (index === 0) return showYearColumns ? '30%' : '34%';
                                     if (!showYearColumns) return '66%';
-                                    if (index === headers.length - 1) return '22%';
-                                    return `${Math.floor(48 / blockYears.length)}%`;
+                                    if (showTotalColumn && index === headers.length - 1) return '22%';
+                                    return `${Math.floor((showTotalColumn ? 48 : 70) / blockYears.length)}%`;
                                 }),
-                                annualRows: showYearColumns ? yearlyRows : [],
-                                years: showYearColumns ? blockYears : []
+                                financial: hasCurrencyValues
                             });
                         }
 
@@ -674,6 +806,7 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                         if (!Array.isArray(row) && row.type === 'section') {
                             flushMetricSection();
                             activeSection = row.label;
+                            activeSectionGroupId = row.groupId;
                             return;
                         }
 
@@ -690,38 +823,94 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
 
                     return (
                         <div key={unit.id} className="unit-section mb-8 break-after-page-avoid">
-                            <div className="report-unit-header flex justify-between items-end border-b-[2px] border-slate-900 pb-1 mb-4">
-                                <h2 className="text-[15px] font-black text-slate-900 uppercase tracking-tight">
-                                    {unit.name} <span className="text-slate-500 text-[11px] ml-1">— {unit.full_name || 'COMANDO GERAL'}</span>
-                                </h2>
-                                <span className="text-[10px] font-black text-slate-400 italic">PÁGINA DETALHADA</span>
+                            <div className="report-unit-header mb-4">
+                                <div className="report-unit-heading">
+                                    <h2 className="text-[15px] font-black text-slate-900 uppercase tracking-tight">{unit.name}</h2>
+                                    <span className="text-[10px] font-black text-slate-400 italic">PÁGINA DETALHADA</span>
+                                </div>
+                                <div className="report-unit-meta">
+                                    {unit.responsibleSector && <span>Setor responsável: <strong>{unit.responsibleSector}</strong></span>}
+                                    <span>Última atualização: <strong>{latestUnitUpdateDate ? latestUnitUpdateDate.toLocaleString('pt-BR') : 'Sem registro'}</strong></span>
+                                    <span>Responsável pela atualização: <strong>{latestUnitUpdateAuthor}</strong></span>
+                                </div>
                             </div>
 
                             <div className="space-y-4">
-                                {metricTableBlocks.map(block => (
-                                    <div key={block.id} className="report-metric-panel break-inside-avoid">
-                                        <CompactTable
-                                            headers={block.headers}
-                                            rows={block.rows}
-                                            colWidths={block.colWidths}
-                                            variant="metrics"
-                                        />
-                                        {block.annualRows.length > 0 && <AnnualComparisonCharts rows={block.annualRows} years={block.years} />}
-                                    </div>
-                                ))}
+                                {groupsForUnit.map(group => {
+                                        if (group.mode !== 'collection' && group.reportLayout !== 'text') {
+                                            return metricTableBlocks
+                                                .filter(block => block.groupId === group.id)
+                                                .map(block => (
+                                                    <div key={block.id} className="report-metric-panel break-inside-avoid">
+                                                        <CompactTable
+                                                            headers={block.headers}
+                                                            rows={block.rows}
+                                                            colWidths={block.colWidths}
+                                                            variant="metrics"
+                                                            highlightRules={getTableHighlights(block.groupId)}
+                                                            financial={block.financial}
+                                                        />
+                                                    </div>
+                                                ));
+                                        }
 
-                                {collectionGroupsForUnit.map(group => {
+                                        if (group.mode === 'snapshot' && group.reportLayout === 'text') {
+                                            const section = textSectionsForUnit.find(item => item.group.id === group.id);
+                                            return <TextSection key={group.id} title={group.title} values={section?.values ?? []} />;
+                                        }
+
                                         const unitCollections = collectionItems.filter(i => i.unitId === unit.id && i.dataGroupId === group.id && i.status !== 'archived');
-                                        const itemsToRender = [...unitCollections].sort((a, b) => (b.isFeatured ? 1 : 0) - (a.isFeatured ? 1 : 0) || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+                                        const collectionFields = fields
+                                            .filter(field => field.dataGroupId === group.id && field.isActive && field.type !== 'image')
+                                            .sort((a, b) => a.order - b.order);
+                                        const getCollectionFieldValue = (itemId: string, field: any) => {
+                                            const value = getValuesForItem(itemId).find((itemValue: any) => itemValue.fieldId === field.id);
+                                            return formatCollectionValue(field, value) || '-';
+                                        };
+                                        const renderCollectionFieldValue = (itemId: string, field: any) => {
+                                            const value = getCollectionFieldValue(itemId, field);
+                                            if (['number', 'currency', 'percentage', 'calculated'].includes(field.type)) {
+                                                return <MetricValue key={`${itemId}-${field.id}`} value={value} label={field.name} />;
+                                            }
+                                            return value;
+                                        };
+                                        const itemsToRender = [...unitCollections].sort((a, b) => {
+                                            if (group.collectionLayout === 'table' && collectionFields.length > 0) {
+                                                return String(getCollectionFieldValue(a.id, collectionFields[0])).localeCompare(
+                                                    String(getCollectionFieldValue(b.id, collectionFields[0])),
+                                                    'pt-BR',
+                                                    { sensitivity: 'base', numeric: true }
+                                                );
+                                            }
+                                            return (b.isFeatured ? 1 : 0) - (a.isFeatured ? 1 : 0) || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+                                        });
 
                                         if (itemsToRender.length === 0) return null;
 
+                                        if (group.collectionLayout === 'table' && collectionFields.length > 0) {
+                                            return (
+                                                <div key={group.id} className="report-metric-panel break-inside-avoid">
+                                                    <CompactTable
+                                                        headers={collectionFields.map(field => field.name)}
+                                                        rows={[
+                                                            { type: 'section' as const, label: group.title, groupId: group.id },
+                                                            ...itemsToRender.map(item =>
+                                                                collectionFields.map(field => renderCollectionFieldValue(item.id, field))
+                                                            )
+                                                        ]}
+                                                        colWidths={getCollectionColumnWidths(collectionFields)}
+                                                        variant="metrics"
+                                                        highlightRules={getTableHighlights(group.id)}
+                                                    />
+                                                </div>
+                                            );
+                                        }
+
                                         return (
-                                            <div key={group.id} className="report-collection-panel break-inside-avoid">
-                                                <SectionHeader title={getRuntimeSectionLabel(group)} />
+                                            <div key={group.id} className="report-metric-panel break-inside-avoid">
                                                 <CompactTable 
                                                     headers={['Tópico / Ocorrência', 'Data / Período', 'Informações', 'Sinc.']}
-                                                    rows={itemsToRender.map(item => {
+                                                    rows={[{ type: 'section' as const, label: group.title, groupId: group.id }, ...itemsToRender.map(item => {
                                                         const itemValues = getValuesForItem(item.id);
                                                         const valuesWithField = itemValues
                                                             .map((fv: any) => ({ value: fv, field: fields.find(f => f.id === fv.fieldId) }))
@@ -751,9 +940,11 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                                             detailLabel || 'Sem informações preenchidas.',
                                                             new Date(item.updatedAt).toLocaleDateString('pt-BR', {day: '2-digit', month: '2-digit'})
                                                         ];
-                                                    })}
-                                                    colWidths={['20%', '22%', '48%', '10%']}
-                                                    variant="collection"
+                                                    })]}
+                                                    colWidths={['18%', '18%', '54%', '10%']}
+                                                    variant="metrics"
+                                                    highlightRules={getTableHighlights(group.id)}
+                                                    narrative
                                                 />
                                             </div>
                                         );
@@ -785,8 +976,6 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                     .report-section-header,
                     .report-table-row,
                     .report-group-row,
-                    .report-chart,
-                    .annual-chart-grid,
                     .report-reading-item,
                     .report-unit-header,
                     .report-category-header {
@@ -807,13 +996,43 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                     }
                     .report-collection-panel,
                     .report-metric-panel {
-                        break-inside: avoid;
-                        page-break-inside: avoid;
+                        break-inside: auto !important;
+                        page-break-inside: auto !important;
                     }
                     .report-table,
                     .report-table table,
+                    .report-table tbody {
+                        break-inside: auto !important;
+                        page-break-inside: auto !important;
+                    }
+                    .report-table {
+                        overflow: visible !important;
+                        border: 0 !important;
+                        border-radius: 0 !important;
+                        box-shadow: none !important;
+                    }
+                    .report-table table {
+                        border: 1px solid #cbd5e1;
+                    }
+                    .report-text-panel,
+                    .report-text-content {
+                        break-inside: auto !important;
+                        page-break-inside: auto !important;
+                    }
+                    .report-font-large .report-collection-panel,
+                    .report-font-large .report-metric-panel,
+                    .report-font-large .report-table,
+                    .report-font-large .report-table table,
+                    .report-font-large .report-table tbody {
+                        break-inside: auto;
+                        page-break-inside: auto;
+                    }
+                    .report-font-large .report-section-header,
+                    .report-font-large .report-table tr {
+                        break-inside: avoid;
+                        page-break-inside: avoid;
+                    }
                     .report-table thead,
-                    .report-table tbody,
                     .report-table tbody tr:first-child,
                     .report-collection-panel .report-section-header,
                     .report-metric-panel .report-section-header {
@@ -824,9 +1043,14 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                         break-before: avoid;
                         page-break-before: avoid;
                     }
-                    thead { display: table-header-group; }
+                    .report-table thead { display: table-header-group; }
                     tfoot { display: table-footer-group; }
-                    tr, td, th { page-break-inside: avoid; break-inside: avoid; }
+                    .report-table tr,
+                    .report-table td,
+                    .report-table th {
+                        page-break-inside: avoid;
+                        break-inside: avoid;
+                    }
                 }
 
                 .report-unit-header {
@@ -836,6 +1060,33 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                     border-radius: 10px;
                     padding: 12px 14px;
                     margin-bottom: 14px;
+                }
+
+                .report-unit-heading {
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: end;
+                    gap: 12px;
+                }
+
+                .report-unit-heading h2 {
+                    margin: 0;
+                }
+
+                .report-unit-meta {
+                    display: flex;
+                    flex-wrap: wrap;
+                    gap: 6px 14px;
+                    margin-top: 7px;
+                    color: #475569;
+                    font-size: 10px;
+                    font-weight: 850;
+                    text-transform: uppercase;
+                    letter-spacing: 0.03em;
+                }
+
+                .report-unit-meta strong {
+                    color: #0f172a;
                 }
 
                 .report-category-block {
@@ -895,7 +1146,8 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                 }
 
                 .report-metric-panel,
-                .report-collection-panel {
+                .report-collection-panel,
+                .report-text-panel {
                     margin-bottom: 16px;
                     break-inside: avoid;
                     page-break-inside: avoid;
@@ -912,6 +1164,31 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
 
                 .report-section-header h2 {
                     letter-spacing: 0.03em;
+                }
+
+                .report-text-content {
+                    border: 1px solid #cbd5e1;
+                    border-radius: 10px;
+                    padding: 13px 14px;
+                    color: #1e293b;
+                    background: #ffffff;
+                    font-size: 12px;
+                    line-height: 1.6;
+                    font-weight: 600;
+                    white-space: pre-wrap;
+                }
+
+                .report-text-content p {
+                    margin: 0;
+                }
+
+                .report-text-content p + p {
+                    margin-top: 10px;
+                }
+
+                .report-text-empty {
+                    color: #64748b;
+                    font-style: italic;
                 }
 
                 .report-table {
@@ -940,6 +1217,31 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                     page-break-after: avoid;
                 }
 
+                .report-highlight-khaki {
+                    background: #f7f3df !important;
+                    color: #3f371e !important;
+                }
+
+                .report-highlight-blue {
+                    background: #dbeafe !important;
+                    color: #1e3a8a !important;
+                }
+
+                .report-highlight-green {
+                    background: #dcfce7 !important;
+                    color: #14532d !important;
+                }
+
+                .report-highlight-amber {
+                    background: #fef3c7 !important;
+                    color: #78350f !important;
+                }
+
+                .report-highlight-red {
+                    background: #fee2e2 !important;
+                    color: #7f1d1d !important;
+                }
+
                 .report-table-metrics th {
                     font-size: 12px;
                     padding-top: 10px;
@@ -959,6 +1261,7 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                 .report-table-metrics td {
                     font-size: 12px;
                     vertical-align: top;
+                    overflow-wrap: anywhere;
                 }
 
                 .report-table-metrics td:first-child {
@@ -982,15 +1285,22 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                     color: #0f172a;
                 }
 
-                .report-table-collection td {
-                    vertical-align: top;
+                .report-table-financial th:not(:first-child),
+                .report-table-financial td:not(:first-child) {
+                    padding-left: 3px;
+                    padding-right: 3px;
                 }
 
-                .report-table-collection td:nth-child(2) {
-                    font-size: 11.5px;
-                    line-height: 1.35;
-                    color: #334155;
-                    background: #f8fafc;
+                .report-table-financial td:first-child {
+                    padding-left: 8px;
+                    padding-right: 6px;
+                }
+
+                .report-table-narrative th:nth-child(2),
+                .report-table-narrative th:nth-child(3),
+                .report-table-narrative td:nth-child(2),
+                .report-table-narrative td:nth-child(3) {
+                    text-align: left;
                 }
 
                 .executive-stat-grid {
@@ -1133,6 +1443,11 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                     letter-spacing: 0.04em;
                 }
 
+                .report-last-update-box {
+                    margin-top: 8px;
+                    background: #ffffff;
+                }
+
                 .report-emission-box span {
                     display: inline-flex;
                     align-items: center;
@@ -1144,143 +1459,126 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                     font-size: 12px;
                 }
 
-                .report-chart {
-                    border: 1px solid #cbd5e1;
-                    border-radius: 10px;
-                    background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-                    padding: 12px;
-                    break-inside: avoid;
-                    page-break-inside: avoid;
-                    box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
-                }
-
-                .report-chart-title {
-                    display: flex;
-                    align-items: center;
-                    gap: 5px;
-                    color: #0f172a;
-                    font-size: 11px;
-                    font-weight: 900;
-                    text-transform: uppercase;
-                    letter-spacing: 0.04em;
-                    margin-bottom: 10px;
-                }
-
-                .report-chart-rows {
-                    display: flex;
-                    flex-direction: column;
-                    gap: 7px;
-                }
-
-                .report-chart-row {
-                    display: grid;
-                    grid-template-columns: 28% 1fr 34px;
-                    align-items: center;
-                    gap: 8px;
-                    break-inside: avoid;
-                    page-break-inside: avoid;
-                }
-
-                .report-chart-label {
-                    color: #334155;
-                    font-size: 10px;
-                    font-weight: 900;
-                    line-height: 1.1;
-                    text-transform: uppercase;
-                    word-break: break-word;
-                }
-
-                .report-chart-track {
+                .report-metric-value {
                     display: block;
-                    height: 14px;
-                    border-radius: 999px;
-                    background: #e2e8f0;
-                    overflow: hidden;
-                    border: 1px solid #dbe3ee;
-                }
-
-                .report-chart-bar {
-                    display: block;
-                    height: 100%;
-                    border-radius: inherit;
-                }
-
-                .report-chart-bar-khaki { background: #8a7a3f; }
-                .report-chart-bar-emerald { background: #047857; }
-                .report-chart-bar-amber { background: #b45309; }
-                .report-chart-bar-slate { background: #475569; }
-
-                .report-chart-value {
-                    color: #0f172a;
-                    font-size: 11px;
-                    font-weight: 900;
-                    text-align: right;
-                }
-
-                .annual-chart-grid {
-                    display: grid;
-                    grid-template-columns: repeat(2, minmax(0, 1fr));
-                    gap: 10px;
-                    margin-top: 8px;
-                    margin-bottom: 14px;
-                }
-
-                .annual-chart-grid .report-chart {
-                    padding: 10px;
-                }
-
-                .report-value-pill {
-                    display: inline-flex;
-                    flex-direction: column;
-                    align-items: stretch;
-                    justify-content: center;
-                    min-width: 72px;
                     max-width: 100%;
-                    border: 1px solid #cbd5e1;
-                    border-radius: 999px;
-                    padding: 4px 9px;
-                    background: #ffffff;
                     color: #0f172a;
+                    font-size: 13px;
                     font-weight: 900;
-                    box-shadow: inset 0 -1px 0 rgba(15, 23, 42, 0.08);
+                    font-variant-numeric: tabular-nums;
+                    letter-spacing: -0.01em;
+                    line-height: 1.35;
+                    white-space: nowrap;
+                    text-align: center;
                 }
 
-                .report-value-pill.text-emerald-700 {
-                    border-color: #86efac;
-                    background: #f0fdf4;
+                .report-metric-value.text-emerald-700 {
                     color: #047857;
                 }
 
-                .report-value-pill.text-red-700 {
-                    border-color: #fecaca;
-                    background: #fef2f2;
+                .report-metric-value.text-red-700 {
                     color: #b91c1c;
                 }
 
-                .report-value-number {
-                    line-height: 1.1;
+                .report-metric-value-currency {
+                    letter-spacing: -0.02em;
                 }
 
-                .report-value-bar {
-                    display: block;
-                    width: 100%;
-                    height: 4px;
-                    margin-top: 4px;
-                    border-radius: 999px;
-                    background: #e2e8f0;
-                    overflow: hidden;
+                .report-metric-value-long {
+                    font-size: 11px;
+                    letter-spacing: -0.035em;
                 }
 
-                .report-value-bar span {
-                    display: block;
-                    height: 100%;
-                    border-radius: inherit;
-                    background: currentColor;
+                .report-metric-value-xlong {
+                    font-size: 9.5px;
+                    letter-spacing: -0.05em;
+                }
+
+                .report-font-large .report-category-header h2 {
+                    font-size: 21px;
+                }
+
+                .report-font-large .report-category-header p,
+                .report-font-large .report-reading-item span,
+                .report-font-large .report-emission-box {
+                    font-size: 12px;
+                    line-height: 1.45;
+                }
+
+                .report-font-large .report-reading-item strong,
+                .report-font-large .report-emission-box strong {
+                    font-size: 13px;
+                }
+
+                .report-font-large .report-unit-header h2 {
+                    font-size: 18px;
+                    line-height: 1.35;
+                }
+
+                .report-font-large .report-unit-heading span,
+                .report-font-large .report-unit-meta {
+                    font-size: 12px;
+                }
+
+                .report-font-large .report-section-header h2 {
+                    font-size: 14px;
+                    line-height: 1.35;
+                }
+
+                .report-font-large .report-text-content {
+                    font-size: 14px;
+                    line-height: 1.65;
+                    padding: 15px 16px;
+                }
+
+                .report-font-large .report-table th {
+                    font-size: 12px;
+                    line-height: 1.35;
+                    padding: 10px;
+                }
+
+                .report-font-large .report-table td,
+                .report-font-large .report-table-metrics td {
+                    font-size: 13px;
+                    line-height: 1.5;
+                    padding: 10px;
+                }
+
+                .report-font-large .report-table-metrics td:not(:first-child),
+                .report-font-large .report-table-metrics td:last-child {
+                    font-size: 14px;
+                }
+
+                .report-font-large .report-metric-value {
+                    font-size: 15px;
+                }
+
+                .report-font-large .report-metric-value-long {
+                    font-size: 12px;
+                }
+
+                .report-font-large .report-metric-value-xlong {
+                    font-size: 10px;
+                }
+
+                .report-font-large .report-group-row td {
+                    font-size: 14px;
+                }
+
+                .report-font-large .executive-stat-card span,
+                .report-font-large .executive-stat-card p {
+                    font-size: 11px;
+                }
+
+                .report-font-large .executive-stat-card strong {
+                    font-size: 34px;
                 }
 
                 .report-value-neutral {
+                    display: block;
                     color: #334155;
                     font-weight: 800;
+                    overflow-wrap: anywhere;
                 }
 
                 * {

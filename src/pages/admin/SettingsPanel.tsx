@@ -10,6 +10,7 @@ import {
 import { supabase } from '../../lib/supabase';
 import { getPublicUploadUrl } from '../../utils/storageUrls';
 import { STORAGE_BUCKET_UPLOADS } from '../../config/storage';
+import { compareTextPtBr, sortByTextPtBr } from '../../utils/textOrdering';
 
 type Tab = 'general' | 'security' | 'notifications' | 'indicators';
 
@@ -237,12 +238,12 @@ function TabGeneral() {
                                     onChange={(e) => setBgSize(e.target.value)}
                                     className="w-full border border-pm-secondary/30 rounded-lg px-2 py-1.5 text-xs focus:ring-2 focus:ring-pm-primary outline-none bg-white"
                                 >
-                                    <option value="cover">Preencher tela (Padrão)</option>
                                     <option value="contain">Encaixar (Não corta)</option>
-                                    <option value="auto">Tamanho original</option>
-                                    <option value="repeat">Repetir Mosaico</option>
+                                    <option value="cover">Preencher tela (Padrão)</option>
                                     <option value="repeat-x">Repetir Horizontal</option>
+                                    <option value="repeat">Repetir Mosaico</option>
                                     <option value="repeat-y">Repetir Vertical</option>
+                                    <option value="auto">Tamanho original</option>
                                 </select>
                             </div>
                             <div>
@@ -253,12 +254,12 @@ function TabGeneral() {
                                     className="w-full border border-pm-secondary/30 rounded-lg px-2 py-1.5 text-xs focus:ring-2 focus:ring-pm-primary outline-none bg-white"
                                 >
                                     <option value="center">Centralizado</option>
-                                    <option value="top">Topo</option>
-                                    <option value="bottom">Rodapé</option>
-                                    <option value="left">Esquerda</option>
                                     <option value="right">Direita</option>
-                                    <option value="top left">Topo Esquerda</option>
+                                    <option value="left">Esquerda</option>
+                                    <option value="bottom">Rodapé</option>
+                                    <option value="top">Topo</option>
                                     <option value="top right">Topo Direita</option>
+                                    <option value="top left">Topo Esquerda</option>
                                 </select>
                             </div>
                         </div>
@@ -309,15 +310,15 @@ function TabGeneral() {
                     <div>
                         <label className="block text-sm font-medium text-pm-dark mb-1">Fuso Horário</label>
                         <select value={systemTz} onChange={e => setSystemTz(e.target.value)} className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none bg-white">
-                            <option>Brasília (BRT) - UTC-3</option>
                             <option>Amazônas (AMT) - UTC-4</option>
+                            <option>Brasília (BRT) - UTC-3</option>
                         </select>
                     </div>
                     <div>
                         <label className="block text-sm font-medium text-pm-dark mb-1">Idioma</label>
                         <select value={systemLang} onChange={e => setSystemLang(e.target.value)} className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none bg-white">
-                            <option>Português (Brasil)</option>
                             <option>English (US)</option>
+                            <option>Português (Brasil)</option>
                         </select>
                     </div>
                 </div>
@@ -377,7 +378,7 @@ function TabSecurity() {
                         </select>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
-                        {['Letras maiúsculas obrigatórias', 'Números obrigatórios', 'Caracteres especiais obrigatórios', 'Expirar senha a cada 90 dias'].map(rule => (
+                        {['Letras maiúsculas obrigatórias', 'Números obrigatórios', 'Caracteres especiais obrigatórios', 'Expirar senha a cada 90 dias'].sort(compareTextPtBr).map(rule => (
                             <label key={rule} className="flex items-center gap-2 text-sm text-pm-dark font-medium cursor-pointer p-2 rounded-lg border border-pm-secondary/10 hover:bg-pm-light">
                                 <input type="checkbox" defaultChecked className="w-4 h-4 text-pm-primary rounded" />
                                 {rule}
@@ -417,7 +418,7 @@ function TabSecurity() {
             <div className="bg-white p-6 rounded-xl shadow-sm border border-pm-secondary/20">
                 <h3 className="font-bold text-pm-dark border-b border-pm-secondary/10 pb-3 mb-4">Políticas de Segurança</h3>
                 <div className="space-y-3">
-                    {policies.map(p => (
+                    {sortByTextPtBr(policies, policy => policy.label).map(p => (
                         <div key={p.id} className="flex items-center justify-between p-3 rounded-lg border border-pm-secondary/10 hover:bg-pm-light transition-colors">
                             <div>
                                 <p className="text-sm font-medium text-pm-dark">{p.label}</p>
@@ -495,9 +496,9 @@ function TabNotifications() {
             
             // Garantir que temos deadlines para todas as unidades se estiver vazio
             if (settings.notification_deadlines && settings.notification_deadlines.length > 0) {
-                setDeadlines(settings.notification_deadlines);
+                setDeadlines(sortByTextPtBr(settings.notification_deadlines, deadline => deadline.unit));
             } else {
-                setDeadlines(units.map(u => ({ id: u.id, unit: u.name, day: 'Sexta-feira', hour: '18:00' })));
+                setDeadlines(sortByTextPtBr(units, unit => unit.name).map(u => ({ id: u.id, unit: u.name, day: 'Sexta-feira', hour: '18:00' })));
             }
         }
     }, [settings, units]);
@@ -594,9 +595,9 @@ function TabNotifications() {
                                     onChange={e => setNewType(e.target.value as any)}
                                     className="w-full border border-pm-secondary/20 rounded-xl px-4 py-2.5 text-sm focus:ring-2 focus:ring-pm-primary outline-none bg-white font-bold"
                                 >
-                                    <option value="info">Informação (Azul)</option>
                                     <option value="warning">Aviso (Laranja)</option>
                                     <option value="error">Crítico (Vermelho)</option>
+                                    <option value="info">Informação (Azul)</option>
                                     <option value="success">Sucesso (Verde)</option>
                                 </select>
                             </div>
@@ -621,10 +622,10 @@ function TabNotifications() {
                                     onChange={e => setNewRole(e.target.value as any)}
                                     className="bg-white border border-pm-secondary/20 rounded-lg px-3 py-1.5 text-xs font-bold text-pm-dark outline-none"
                                 >
-                                    <option value="all">Todos os Usuários</option>
-                                    <option value="editor">Apenas Editores</option>
-                                    <option value="commander">Apenas Comandantes</option>
                                     <option value="admin">Apenas Administradores</option>
+                                    <option value="commander">Apenas Comandantes</option>
+                                    <option value="editor">Apenas Editores</option>
+                                    <option value="all">Todos os Usuários</option>
                                 </select>
                             </div>
                             <div className="flex gap-2">
@@ -696,7 +697,7 @@ function TabNotifications() {
             <div className="bg-white p-6 rounded-xl shadow-sm border border-pm-secondary/20">
                 <h3 className="font-bold text-pm-dark border-b border-pm-secondary/10 pb-3 mb-4">Canais de Notificação</h3>
                 <div className="space-y-3">
-                    {channels.map(c => (
+                    {sortByTextPtBr(channels, channel => channel.label).map(c => (
                         <div key={c.id} className="flex items-start justify-between p-3 rounded-lg border border-pm-secondary/10 hover:bg-pm-light transition-colors gap-4">
                             <div className="flex-1">
                                 <div className="flex items-center gap-2">
@@ -758,7 +759,7 @@ function TabNotifications() {
                 <h3 className="font-bold text-pm-dark border-b border-pm-secondary/10 pb-3 mb-4">Prazos de Entrega por Unidade</h3>
                 <p className="text-xs text-pm-secondary mb-4">Define quando cada unidade deve ter seus dados atualizados. Após o prazo, alertas são enviados automaticamente.</p>
                 <div className="space-y-3">
-                    {deadlines.map(d => (
+                    {sortByTextPtBr(deadlines, deadline => deadline.unit).map(d => (
                         <div key={d.id} className="flex items-center gap-3 p-3 rounded-lg border border-pm-secondary/10 bg-pm-light/30">
                             <span className="text-sm font-bold text-pm-dark w-24 truncate">{d.unit}</span>
                             <select 
@@ -802,12 +803,13 @@ function TabIndicators() {
     const indicatorTypes = [
         { icon: Hash, label: 'Numérico', description: 'Contagem absoluta. Ex: 42 policiais', color: 'text-blue-600 bg-blue-50' },
         { icon: Percent, label: 'Percentual', description: 'Valor em %. Ex: 87% de cumprimento', color: 'text-green-600 bg-green-50' },
+        { icon: Hash, label: 'Valor', description: 'Moeda brasileira. Ex: R$ 1.250,50', color: 'text-emerald-600 bg-emerald-50' },
         { icon: Calculator, label: 'Calculado', description: 'Operações matemáticas automáticas', color: 'text-purple-600 bg-purple-50' },
         { icon: BarChart2, label: 'Tendência', description: 'Compara com o período anterior', color: 'text-amber-600 bg-amber-50' },
     ];
 
     const totalFields = fields.filter(f => f.isActive);
-    const numericFields = totalFields.filter(f => f.type === 'number' || f.type === 'percentage' || f.type === 'calculated');
+    const numericFields = totalFields.filter(f => f.type === 'number' || f.type === 'currency' || f.type === 'percentage' || f.type === 'calculated');
     const textFields = totalFields.filter(f => f.type === 'text' || f.type === 'textarea');
     const imageFields = totalFields.filter(f => f.type === 'image');
 
@@ -832,7 +834,7 @@ function TabIndicators() {
             <div className="bg-white p-6 rounded-xl shadow-sm border border-pm-secondary/20">
                 <h3 className="font-bold text-pm-dark border-b border-pm-secondary/10 pb-3 mb-4">Tipos de Indicadores Suportados</h3>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    {indicatorTypes.map(t => (
+                    {sortByTextPtBr(indicatorTypes, type => type.label).map(t => (
                         <div key={t.label} className="p-4 rounded-xl border border-pm-secondary/10 bg-pm-light/30">
                             <div className={`w-8 h-8 rounded-lg flex items-center justify-center mb-3 ${t.color}`}>
                                 <t.icon className="w-4 h-4" />
@@ -852,7 +854,7 @@ function TabIndicators() {
                         { label: 'Campos Numéricos e Percentuais', count: numericFields.length, total: totalFields.length, color: 'bg-blue-500' },
                         { label: 'Campos de Texto', count: textFields.length, total: totalFields.length, color: 'bg-pm-primary' },
                         { label: 'Campos de Imagem', count: imageFields.length, total: totalFields.length, color: 'bg-green-500' },
-                    ].map(item => (
+                    ].sort((a, b) => compareTextPtBr(a.label, b.label)).map(item => (
                         <div key={item.label}>
                             <div className="flex justify-between text-xs font-medium text-pm-dark mb-1">
                                 <span>{item.label}</span>
@@ -876,11 +878,11 @@ function TabIndicators() {
                     <p className="text-sm text-pm-secondary italic text-center py-6">Nenhuma unidade cadastrada.</p>
                 ) : (
                     <div className="space-y-2">
-                        {units.map(unit => {
+                        {sortByTextPtBr(units, unit => unit.name).map(unit => {
                             const unitGroups = dataGroups.filter(g => g.unitId === unit.id);
                             const unitGroupIds = unitGroups.map(g => g.id);
                             const unitFields = fields.filter(f => unitGroupIds.includes(f.dataGroupId) && f.isActive);
-                            const unitNumeric = unitFields.filter(f => f.type === 'number' || f.type === 'percentage' || f.type === 'calculated').length;
+                            const unitNumeric = unitFields.filter(f => f.type === 'number' || f.type === 'currency' || f.type === 'percentage' || f.type === 'calculated').length;
                             return (
                                 <div key={unit.id} className="flex items-center gap-3 p-3 rounded-lg border border-pm-secondary/10 bg-pm-light/20 hover:bg-pm-light/50 transition-colors">
                                     <div className="w-12 h-12 rounded-lg bg-pm-primary/10 flex items-center justify-center flex-shrink-0">
@@ -911,7 +913,7 @@ function TabIndicators() {
                         { label: 'Marcar indicadores críticos (abaixo da meta) em vermelho', enabled: true },
                         { label: 'Mostrar meta nos cards do dashboard', enabled: false },
                         { label: 'Incluir indicadores sem preenchimento no relatório (como "—")', enabled: true },
-                    ].map((item, i) => (
+                    ].sort((a, b) => compareTextPtBr(a.label, b.label)).map((item, i) => (
                         <label key={i} className="flex items-center justify-between p-3 rounded-lg border border-pm-secondary/10 hover:bg-pm-light cursor-pointer">
                             <span className="text-sm font-medium text-pm-dark">{item.label}</span>
                             <input type="checkbox" defaultChecked={item.enabled} className="w-4 h-4 text-pm-primary rounded" />

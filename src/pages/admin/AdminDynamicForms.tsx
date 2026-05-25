@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useAuth, FieldType, Field, CalculationOperation } from '../../store/AuthContext';
+import { useAuth, FieldType, Field, CalculationOperation, DataGroupUpdateFrequency, DataGroupCollectionLayout, DataGroupReportLayout } from '../../store/AuthContext';
 import {
     Plus, Trash2, LayoutTemplate, Type, Hash, Image as ImageIcon, Percent, Edit2, AlertTriangle,
     Save, Copy, ChevronUp, ChevronDown, Search, X, Check, Smile, Calculator,
@@ -9,6 +9,7 @@ import {
     Brain, MessagesSquare, CarFront, Truck, Siren, Radio, Map, MapPinned, Target, Crosshair,
     Briefcase, CalendarCheck, NotebookPen, Bell, ClipboardPlus, Package, AlignLeft, Archive, ArrowLeft
 } from 'lucide-react';
+import { compareTextPtBr } from '../../utils/textOrdering';
 
 const TOPIC_ICONS = [
     { name: 'database', label: 'database', icon: Database },
@@ -71,7 +72,7 @@ function IconPickerModal({ value, onConfirm, onClose }: IconPickerModalProps) {
 
     const filtered = TOPIC_ICONS.filter(ic =>
         ic.label.toLowerCase().includes(search.toLowerCase())
-    );
+    ).sort((a, b) => compareTextPtBr(a.label, b.label));
 
     const SelectedIconDef = getIconByName(selected);
     const SelectedIconNode = SelectedIconDef.icon;
@@ -193,11 +194,19 @@ export default function AdminDynamicForms() {
 
     const [newUnitName, setNewUnitName] = useState('');
     const [newUnitIcon, setNewUnitIcon] = useState('briefcase'); // Default icon
+    const [newUnitRegion, setNewUnitRegion] = useState('');
+    const [newUnitAscom, setNewUnitAscom] = useState('');
+    const [newUnitResponsibleSector, setNewUnitResponsibleSector] = useState('');
+    const [newUnitCategory, setNewUnitCategory] = useState('');
 
     // Group CRUDS
     const [newGroupTitle, setNewGroupTitle] = useState('');
     const [newGroupMode, setNewGroupMode] = useState<'snapshot' | 'collection'>('snapshot');
-    const [newGroupCategory, setNewGroupCategory] = useState('');
+    const [newGroupUpdateFrequency, setNewGroupUpdateFrequency] = useState<DataGroupUpdateFrequency>('fixed');
+    const [newGroupShowTotal, setNewGroupShowTotal] = useState(true);
+    const [newGroupCollectionLayout, setNewGroupCollectionLayout] = useState<DataGroupCollectionLayout>('narrative');
+    const [newGroupReportLayout, setNewGroupReportLayout] = useState<DataGroupReportLayout>('table');
+    const [groupError, setGroupError] = useState('');
 
     // Editing State
     const [editingField, setEditingField] = useState<Field | null>(null);
@@ -207,6 +216,7 @@ export default function AdminDynamicForms() {
     // Calculation State
     const [calculationOperation, setCalculationOperation] = useState<CalculationOperation>('sum');
     const [selectedSourceFields, setSelectedSourceFields] = useState<string[]>([]);
+    const [enumOptionsText, setEnumOptionsText] = useState('');
 
     // Deleting State
     const [deletingField, setDeletingField] = useState<Field | null>(null);
@@ -214,13 +224,20 @@ export default function AdminDynamicForms() {
     // Group CRUDS State
     const [editingGroup, setEditingGroup] = useState<any>(null); // Type is DataGroup
     const [editGroupTitle, setEditGroupTitle] = useState('');
-    const [editGroupCategory, setEditGroupCategory] = useState('');
+    const [editGroupUpdateFrequency, setEditGroupUpdateFrequency] = useState<DataGroupUpdateFrequency>('fixed');
+    const [editGroupShowTotal, setEditGroupShowTotal] = useState(true);
+    const [editGroupCollectionLayout, setEditGroupCollectionLayout] = useState<DataGroupCollectionLayout>('narrative');
+    const [editGroupReportLayout, setEditGroupReportLayout] = useState<DataGroupReportLayout>('table');
     const [deletingGroup, setDeletingGroup] = useState<any>(null);
 
     // Unit (Topic) Edit State
     const [editingUnit, setEditingUnit] = useState<any>(null); // Type is Unit (Topico)
     const [editUnitName, setEditUnitName] = useState('');
     const [editUnitIcon, setEditUnitIcon] = useState('briefcase');
+    const [editUnitRegion, setEditUnitRegion] = useState('');
+    const [editUnitAscom, setEditUnitAscom] = useState('');
+    const [editUnitResponsibleSector, setEditUnitResponsibleSector] = useState('');
+    const [editUnitCategory, setEditUnitCategory] = useState('');
     const [deletingUnit, setDeletingUnit] = useState<any>(null); // For confirmation modal
 
     // Icon Picker Modal State
@@ -228,25 +245,17 @@ export default function AdminDynamicForms() {
     const [iconModalTarget, setIconModalTarget] = useState<'create' | 'edit' | null>(null);
 
     const unitGroups = dataGroups.filter(g => g.unitId === selectedUnit);
-    const categoryOptions = Array.from(new Set(unitGroups.map(g => g.categoryTitle?.trim()).filter(Boolean) as string[]));
+    const categoryOptions = Array.from(new Set([
+        ...units.map(unit => unit.reportCategoryTitle?.trim()),
+        ...dataGroups.map(group => group.categoryTitle?.trim())
+    ].filter(Boolean) as string[])).sort(compareTextPtBr);
     const getCategoryOrder = (categoryTitle: string) => {
-        const matching = unitGroups.filter(g => (g.categoryTitle || '').trim() === categoryTitle);
-        return matching.length > 0 ? Math.min(...matching.map(g => g.categoryOrder ?? 999)) : categoryOptions.length + 1;
+        const matching = units.filter(unit => (unit.reportCategoryTitle || '').trim() === categoryTitle);
+        return matching.length > 0 ? Math.min(...matching.map(unit => unit.reportCategoryOrder ?? 999)) : categoryOptions.length + 1;
     };
-    const groupedUnitGroups = [...unitGroups]
-        .sort((a, b) => (a.categoryOrder ?? 999) - (b.categoryOrder ?? 999) || a.order - b.order)
-        .reduce<{ title: string; order: number; groups: typeof unitGroups }[]>((acc, group) => {
-            const title = group.categoryTitle?.trim() || 'Sem categoria';
-            const existing = acc.find(item => item.title === title);
-            if (existing) {
-                existing.groups.push(group);
-                existing.order = Math.min(existing.order, group.categoryOrder ?? 999);
-                return acc;
-            }
-            acc.push({ title, order: group.categoryOrder ?? 999, groups: [group] });
-            return acc;
-        }, [])
-        .sort((a, b) => a.order - b.order);
+    const groupedUnitGroups = unitGroups.length > 0
+        ? [{ title: 'Seções do tópico', order: 0, groups: [...unitGroups].sort((a, b) => a.order - b.order) }]
+        : [];
 
     // Apenas campos ativos para este painel (excluindo os soft-deleted)
     const groupFields = fields.filter(f => f.dataGroupId === selectedGroup && f.isActive).sort((a, b) => a.order - b.order);
@@ -258,10 +267,19 @@ export default function AdminDynamicForms() {
         addUnit({
             id: newId,
             name: newUnitName,
-            description: newUnitIcon // Usando description para guardar a Key do Ícone
+            description: newUnitIcon, // Usando description para guardar a Key do Ícone
+            regionName: newUnitRegion.trim() || null,
+            regionalAscom: newUnitAscom.trim() || null,
+            responsibleSector: newUnitResponsibleSector.trim() || null,
+            reportCategoryTitle: newUnitCategory.trim() || null,
+            reportCategoryOrder: newUnitCategory.trim() ? getCategoryOrder(newUnitCategory.trim()) : 999
         });
         setNewUnitName('');
         setNewUnitIcon('briefcase');
+        setNewUnitRegion('');
+        setNewUnitAscom('');
+        setNewUnitResponsibleSector('');
+        setNewUnitCategory('');
         setSelectedUnit(newId);
         setSelectedGroup(null);
     };
@@ -271,7 +289,12 @@ export default function AdminDynamicForms() {
         // @ts-ignore
         updateUnit(editingUnit.id, {
             name: editUnitName,
-            description: editUnitIcon
+            description: editUnitIcon,
+            regionName: editUnitRegion.trim() || null,
+            regionalAscom: editUnitAscom.trim() || null,
+            responsibleSector: editUnitResponsibleSector.trim() || null,
+            reportCategoryTitle: editUnitCategory.trim() || null,
+            reportCategoryOrder: editUnitCategory.trim() ? getCategoryOrder(editUnitCategory.trim()) : 999
         });
         setEditingUnit(null);
     }
@@ -287,37 +310,60 @@ export default function AdminDynamicForms() {
         setDeletingUnit(null);
     }
 
-    const handleCreateGroup = () => {
+    const handleCreateGroup = async () => {
         if (!newGroupTitle.trim() || !selectedUnit) return;
         const newId = crypto.randomUUID();
-        addDataGroup({
-            id: newId,
-            unitId: selectedUnit,
-            title: newGroupTitle,
-            order: unitGroups.length + 1,
-            mode: newGroupMode,
-            categoryTitle: newGroupCategory.trim() || null,
-            categoryOrder: newGroupCategory.trim() ? getCategoryOrder(newGroupCategory.trim()) : 999
-        });
+        setGroupError('');
+        try {
+            await addDataGroup({
+                id: newId,
+                unitId: selectedUnit,
+                title: newGroupTitle,
+                order: unitGroups.length + 1,
+                mode: newGroupMode,
+                updateFrequency: newGroupMode === 'snapshot' && newGroupReportLayout === 'table' ? newGroupUpdateFrequency : 'fixed',
+                showTotal: newGroupShowTotal,
+                collectionLayout: newGroupMode === 'collection' ? newGroupCollectionLayout : 'narrative',
+                reportLayout: newGroupMode === 'snapshot' ? newGroupReportLayout : 'table',
+                categoryTitle: null,
+                categoryOrder: 999
+            });
+        } catch (error: any) {
+            setGroupError(`Não foi possível salvar a seção. ${error.message || 'Verifique se a migration de periodicidade foi aplicada.'}`);
+            return;
+        }
         setNewGroupTitle('');
         setNewGroupMode('snapshot');
-        setNewGroupCategory('');
+        setNewGroupUpdateFrequency('fixed');
+        setNewGroupShowTotal(true);
+        setNewGroupCollectionLayout('narrative');
+        setNewGroupReportLayout('table');
         setSelectedGroup(newId);
     };
 
-    const handleDuplicateGroup = (groupToCopy: any) => {
+    const handleDuplicateGroup = async (groupToCopy: any) => {
         const newGroupUUID = crypto.randomUUID();
 
         // Copia o Grupo atualizando ID e Título
-        addDataGroup({
-            id: newGroupUUID,
-            unitId: groupToCopy.unitId,
-            title: `${groupToCopy.title} (Cópia)`,
-            order: unitGroups.length + 1,
-            mode: groupToCopy.mode,
-            categoryTitle: groupToCopy.categoryTitle ?? null,
-            categoryOrder: groupToCopy.categoryOrder ?? 999
-        });
+        setGroupError('');
+        try {
+            await addDataGroup({
+                id: newGroupUUID,
+                unitId: groupToCopy.unitId,
+                title: `${groupToCopy.title} (Cópia)`,
+                order: unitGroups.length + 1,
+                mode: groupToCopy.mode,
+                updateFrequency: groupToCopy.updateFrequency ?? 'fixed',
+                showTotal: groupToCopy.showTotal ?? true,
+                collectionLayout: groupToCopy.collectionLayout ?? 'narrative',
+                reportLayout: groupToCopy.reportLayout ?? 'table',
+                categoryTitle: null,
+                categoryOrder: 999
+            });
+        } catch (error: any) {
+            setGroupError(`Não foi possível duplicar a seção. ${error.message || 'Verifique a configuração do banco de dados.'}`);
+            return;
+        }
 
         // Copia os Campos pertencentes
         const fieldsToCopy = fields.filter(f => f.dataGroupId === groupToCopy.id && f.isActive);
@@ -332,14 +378,21 @@ export default function AdminDynamicForms() {
         setSelectedGroup(newGroupUUID);
     };
 
-    const saveGroupEdit = () => {
+    const saveGroupEdit = async () => {
         if (!editingGroup || !editGroupTitle.trim()) return;
-        const normalizedCategory = editGroupCategory.trim();
-        updateDataGroup(editingGroup.id, {
-            title: editGroupTitle,
-            categoryTitle: normalizedCategory || null,
-            categoryOrder: normalizedCategory ? getCategoryOrder(normalizedCategory) : 999
-        });
+        setGroupError('');
+        try {
+            await updateDataGroup(editingGroup.id, {
+                title: editGroupTitle,
+                updateFrequency: editingGroup.mode === 'snapshot' && editGroupReportLayout === 'table' ? editGroupUpdateFrequency : 'fixed',
+                showTotal: editGroupShowTotal,
+                collectionLayout: editingGroup.mode === 'collection' ? editGroupCollectionLayout : 'narrative',
+                reportLayout: editingGroup.mode === 'snapshot' ? editGroupReportLayout : 'table'
+            });
+        } catch (error: any) {
+            setGroupError(`Não foi possível salvar a periodicidade. ${error.message || 'A migration da periodicidade precisa estar aplicada no banco.'}`);
+            return;
+        }
         setEditingGroup(null);
     }
 
@@ -352,10 +405,12 @@ export default function AdminDynamicForms() {
             type: type,
             required: false,
             order: groupFields.length + 1,
-            isActive: true
+            isActive: true,
+            enumOptions: []
         });
         setCalculationOperation('sum');
         setSelectedSourceFields([]);
+        setEnumOptionsText('');
         setIsCreatingField(true);
         setEditError('');
     };
@@ -404,13 +459,14 @@ export default function AdminDynamicForms() {
         const targetGroup = sortedGroups[targetIdx];
 
         // Swap orders
-        updateDataGroup(groupId, { order: targetGroup.order });
-        updateDataGroup(targetGroup.id, { order: sortedGroups[idx].order });
+        void updateDataGroup(groupId, { order: targetGroup.order }).catch(error => setGroupError(error.message));
+        void updateDataGroup(targetGroup.id, { order: sortedGroups[idx].order }).catch(error => setGroupError(error.message));
     };
 
     // Edição Segura (Lógica Restritiva)
     const openEditModal = (field: Field) => {
         setEditingField({ ...field });
+        setEnumOptionsText((field.enumOptions ?? []).join('\n'));
         if (field.calculationConfig) {
             setCalculationOperation(field.calculationConfig.operation);
             setSelectedSourceFields(field.calculationConfig.sourceFieldIds);
@@ -443,6 +499,20 @@ export default function AdminDynamicForms() {
             editingField.calculationConfig = null;
         }
 
+        if (editingField.type === 'enum') {
+            const options = Array.from(new Set(enumOptionsText
+                .split(/\r?\n/)
+                .map(option => option.trim())
+                .filter(Boolean)));
+            if (options.length === 0) {
+                setEditError('Informe ao menos uma opção para o atributo de lista.');
+                return;
+            }
+            editingField.enumOptions = options;
+        } else {
+            editingField.enumOptions = [];
+        }
+
         if (isCreatingField) {
             addField(editingField);
             setEditingField(null);
@@ -470,7 +540,8 @@ export default function AdminDynamicForms() {
             name: editingField.name,
             required: editingField.required,
             type: editingField.type,
-            calculationConfig: editingField.calculationConfig
+            calculationConfig: editingField.calculationConfig,
+            enumOptions: editingField.enumOptions
         });
         setEditingField(null);
     };
@@ -542,6 +613,26 @@ export default function AdminDynamicForms() {
                                 </div>
 
                                 <div>
+                                    <label className="input-label">CATEGORIA DO RELATÓRIO</label>
+                                    <input
+                                        list="unit-category-options"
+                                        type="text"
+                                        placeholder="Ex: Operacional, Administrativo..."
+                                        value={newUnitCategory}
+                                        onChange={e => setNewUnitCategory(e.target.value)}
+                                        className="input-field"
+                                    />
+                                    <datalist id="unit-category-options">
+                                        {categoryOptions.map(category => (
+                                            <option key={category} value={category} />
+                                        ))}
+                                    </datalist>
+                                    <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
+                                        Todas as seções deste tópico serão exibidas nesta categoria.
+                                    </p>
+                                </div>
+
+                                <div>
                                     <label className="input-label">VETOR VISUAL (ÍCONE)</label>
                                     <button
                                         type="button"
@@ -563,6 +654,43 @@ export default function AdminDynamicForms() {
                                         </div>
                                         <ChevronDown className="w-4 h-4 text-pm-secondary/40" />
                                     </button>
+                                </div>
+
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="input-label">REGIÃO</label>
+                                        <input
+                                            type="text"
+                                            placeholder="Ex: Sudoeste"
+                                            value={newUnitRegion}
+                                            onChange={e => setNewUnitRegion(e.target.value)}
+                                            className="input-field"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="input-label">ASCOM REGIONAL</label>
+                                        <input
+                                            type="text"
+                                            placeholder="Ex: ASCOM Sudoeste"
+                                            value={newUnitAscom}
+                                            onChange={e => setNewUnitAscom(e.target.value)}
+                                            className="input-field"
+                                        />
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="input-label">SETOR RESPONSÁVEL</label>
+                                    <input
+                                        type="text"
+                                        placeholder="Ex: DCS, DOP, Coordenação de Saúde..."
+                                        value={newUnitResponsibleSector}
+                                        onChange={e => setNewUnitResponsibleSector(e.target.value)}
+                                        className="input-field"
+                                    />
+                                    <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
+                                        Área responsável pelo tópico, independente dos usuários que abastecem os dados.
+                                    </p>
                                 </div>
 
                                 <button
@@ -624,6 +752,21 @@ export default function AdminDynamicForms() {
                                                 <span className={`text-[10px] font-bold uppercase tracking-widest ${selectedUnit === unit.id ? 'text-pm-primary' : 'text-pm-secondary/40'}`}>
                                                     {dataGroups.filter(g => g.unitId === unit.id).length} SEÇÕES
                                                 </span>
+                                                {unit.regionName && (
+                                                    <span className={`text-[10px] font-bold uppercase tracking-widest ${selectedUnit === unit.id ? 'text-pm-secondary' : 'text-pm-secondary/40'}`}>
+                                                        {unit.regionName}
+                                                    </span>
+                                                )}
+                                                {unit.responsibleSector && (
+                                                    <span className={`text-[10px] font-bold uppercase tracking-widest truncate ${selectedUnit === unit.id ? 'text-pm-dark/70' : 'text-pm-secondary/40'}`}>
+                                                        {unit.responsibleSector}
+                                                    </span>
+                                                )}
+                                                {unit.reportCategoryTitle && (
+                                                    <span className={`text-[10px] font-bold uppercase tracking-widest truncate ${selectedUnit === unit.id ? 'text-pm-primary' : 'text-pm-secondary/40'}`}>
+                                                        {unit.reportCategoryTitle}
+                                                    </span>
+                                                )}
                                             </div>
                                         </div>
                                     </button>
@@ -633,6 +776,10 @@ export default function AdminDynamicForms() {
                                             setEditingUnit(unit);
                                             setEditUnitName(unit.name);
                                             setEditUnitIcon(unit.description || 'briefcase');
+                                            setEditUnitRegion(unit.regionName || '');
+                                            setEditUnitAscom(unit.regionalAscom || '');
+                                            setEditUnitResponsibleSector(unit.responsibleSector || '');
+                                            setEditUnitCategory(unit.reportCategoryTitle || '');
                                         }}
                                         className={`absolute right-4 top-1/2 -translate-y-1/2 p-2.5 rounded-xl transition-all ${selectedUnit === unit.id ? 'bg-pm-primary/10 text-pm-primary hover:bg-pm-primary hover:text-white shadow-sm' : 'bg-transparent text-pm-secondary/20 hover:text-pm-primary hover:bg-white opacity-0 group-hover:opacity-100'}`}
                                     >
@@ -677,25 +824,6 @@ export default function AdminDynamicForms() {
                                         />
                                     </div>
                                     <div>
-                                        <label className="input-label">CATEGORIA DO RELATÓRIO</label>
-                                        <input
-                                            list="category-options"
-                                            type="text"
-                                            placeholder="Ex: Operacional, Administrativo..."
-                                            value={newGroupCategory}
-                                            onChange={e => setNewGroupCategory(e.target.value)}
-                                            className="input-field"
-                                        />
-                                        <datalist id="category-options">
-                                            {categoryOptions.map(category => (
-                                                <option key={category} value={category} />
-                                            ))}
-                                        </datalist>
-                                        <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
-                                            Use categorias para agrupar seções no relatório e facilitar a leitura.
-                                        </p>
-                                    </div>
-                                    <div>
                                         <label className="input-label">MODO OPERACIONAL</label>
                                         <div className="grid grid-cols-2 gap-3 p-1.5 bg-white border border-pm-secondary/20 rounded-2xl shadow-inner">
                                             <button
@@ -706,7 +834,7 @@ export default function AdminDynamicForms() {
                                                 <span className="text-[9px] font-black uppercase tracking-widest">Snapshot</span>
                                             </button>
                                             <button
-                                                onClick={() => setNewGroupMode('collection')}
+                                                onClick={() => { setNewGroupMode('collection'); setNewGroupUpdateFrequency('fixed'); }}
                                                 className={`flex flex-col items-center justify-center gap-1.5 py-3 rounded-xl transition-all ${newGroupMode === 'collection' ? 'bg-pm-dark text-white shadow-premium' : 'text-pm-secondary hover:bg-pm-light'}`}
                                             >
                                                 <ClipboardList className="w-4 h-4" />
@@ -714,6 +842,79 @@ export default function AdminDynamicForms() {
                                             </button>
                                         </div>
                                     </div>
+                                    {newGroupMode === 'snapshot' && (
+                                        <div>
+                                            <label className="input-label">EXIBIÇÃO NO RELATÓRIO</label>
+                                            <select
+                                                value={newGroupReportLayout}
+                                                onChange={e => {
+                                                    const layout = e.target.value as DataGroupReportLayout;
+                                                    setNewGroupReportLayout(layout);
+                                                    if (layout === 'text') setNewGroupUpdateFrequency('fixed');
+                                                }}
+                                                className="input-field"
+                                            >
+                                                <option value="table">Tabela de indicadores</option>
+                                                <option value="text">Texto livre / Observações</option>
+                                            </select>
+                                            <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
+                                                Texto livre exibe o conteúdo sem cabeçalhos de indicador e total.
+                                            </p>
+                                        </div>
+                                    )}
+                                    {newGroupMode === 'snapshot' && newGroupReportLayout === 'table' && (
+                                        <div>
+                                            <label className="input-label">PERIODICIDADE DOS DADOS</label>
+                                            <select
+                                                value={newGroupUpdateFrequency}
+                                                onChange={e => setNewGroupUpdateFrequency(e.target.value as DataGroupUpdateFrequency)}
+                                                className="input-field"
+                                            >
+                                                <option value="fixed">Cadastro fixo / sem comparativo</option>
+                                                <option value="yearly">Comparativo anual (2023 em diante)</option>
+                                            </select>
+                                            <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
+                                                Use anual quando o ano for o período do lançamento, e não um atributo.
+                                            </p>
+                                        </div>
+                                    )}
+                                    {newGroupMode === 'snapshot' && newGroupReportLayout === 'table' && newGroupUpdateFrequency === 'yearly' && (
+                                        <div>
+                                            <label className="input-label">TOTAL NO RELATÓRIO</label>
+                                            <select
+                                                value={newGroupShowTotal ? 'show' : 'hide'}
+                                                onChange={e => setNewGroupShowTotal(e.target.value === 'show')}
+                                                className="input-field"
+                                            >
+                                                <option value="show">Exibir total</option>
+                                                <option value="hide">Ocultar total</option>
+                                            </select>
+                                            <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
+                                                Aplicado à coluna total do comparativo anual.
+                                            </p>
+                                        </div>
+                                    )}
+                                    {newGroupMode === 'collection' && (
+                                        <div>
+                                            <label className="input-label">EXIBIÇÃO NO RELATÓRIO</label>
+                                            <select
+                                                value={newGroupCollectionLayout}
+                                                onChange={e => setNewGroupCollectionLayout(e.target.value as DataGroupCollectionLayout)}
+                                                className="input-field"
+                                            >
+                                                <option value="narrative">Resumo atual</option>
+                                                <option value="table">Tabela por colunas</option>
+                                            </select>
+                                            <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
+                                                Na tabela, cada atributo vira uma coluna e cada cadastro vira uma linha.
+                                            </p>
+                                        </div>
+                                    )}
+                                    {groupError && (
+                                        <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-bold text-red-600">
+                                            {groupError}
+                                        </p>
+                                    )}
                                     <button
                                         onClick={handleCreateGroup}
                                         disabled={!newGroupTitle.trim()}
@@ -767,6 +968,16 @@ export default function AdminDynamicForms() {
                                                 <span className={`text-[9px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full border ${selectedGroup === g.id ? 'bg-white/20 border-white/30 text-white' : 'bg-pm-light border-pm-secondary/10 text-pm-secondary/60'}`}>
                                                     {g.mode === 'snapshot' ? 'Valores' : 'Itens'}
                                                 </span>
+                                                {g.mode === 'snapshot' && g.updateFrequency === 'yearly' && (
+                                                    <span className={`text-[9px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full border ${selectedGroup === g.id ? 'bg-white/20 border-white/30 text-white' : 'bg-pm-primary/10 border-pm-primary/20 text-pm-primary'}`}>
+                                                        Anual
+                                                    </span>
+                                                )}
+                                                {g.mode === 'snapshot' && g.reportLayout === 'text' && (
+                                                    <span className={`text-[9px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full border ${selectedGroup === g.id ? 'bg-white/20 border-white/30 text-white' : 'bg-pm-primary/10 border-pm-primary/20 text-pm-primary'}`}>
+                                                        Observações
+                                                    </span>
+                                                )}
                                             </div>
                                         </div>
                                         <div className={`flex gap-1.5 transition-opacity ${selectedGroup === g.id ? 'opacity-100' : 'opacity-0 group-hover/dg:opacity-100'}`}>
@@ -777,7 +988,7 @@ export default function AdminDynamicForms() {
                                                 <Copy className="w-4 h-4" />
                                             </button>
                                             <button
-                                                onClick={(e) => { e.stopPropagation(); setEditingGroup(g); setEditGroupTitle(g.title); setEditGroupCategory(g.categoryTitle || ''); }}
+                                                onClick={(e) => { e.stopPropagation(); setGroupError(''); setEditingGroup(g); setEditGroupTitle(g.title); setEditGroupUpdateFrequency(g.updateFrequency ?? 'fixed'); setEditGroupShowTotal(g.showTotal ?? true); setEditGroupCollectionLayout(g.collectionLayout ?? 'narrative'); setEditGroupReportLayout(g.reportLayout ?? 'table'); }}
                                                 className={`p-2 rounded-xl transition-all ${selectedGroup === g.id ? 'bg-white/10 text-white hover:bg-white/20' : 'bg-white text-pm-secondary hover:text-pm-primary shadow-premium border border-pm-secondary/10'}`}
                                             >
                                                 <Edit2 className="w-4 h-4" />
@@ -821,9 +1032,11 @@ export default function AdminDynamicForms() {
                                     <p className="text-[10px] font-black text-pm-secondary/60 uppercase tracking-widest mb-4">Adicionar Novo Atributo</p>
                                     <div className="grid grid-cols-2 gap-3">
                                         <button onClick={() => handleAddField('text')} className="flex items-center gap-3 px-4 py-3 bg-white border border-pm-secondary/10 rounded-2xl text-[10px] font-black text-pm-dark uppercase tracking-tighter hover:border-pm-primary/40 hover:shadow-premium-lg transition-all"><Type className="w-4 h-4 text-pm-primary" /> Texto</button>
+                                        <button onClick={() => handleAddField('enum')} className="flex items-center gap-3 px-4 py-3 bg-white border border-pm-secondary/10 rounded-2xl text-[10px] font-black text-pm-dark uppercase tracking-tighter hover:border-pm-primary/40 hover:shadow-premium-lg transition-all"><ClipboardList className="w-4 h-4 text-pm-primary" /> Lista</button>
                                         <button onClick={() => handleAddField('textarea')} className="flex items-center gap-3 px-4 py-3 bg-white border border-pm-secondary/10 rounded-2xl text-[10px] font-black text-pm-dark uppercase tracking-tighter hover:border-pm-primary/40 hover:shadow-premium-lg transition-all"><AlignLeft className="w-4 h-4 text-pm-primary" /> Descritivo</button>
                                         <button onClick={() => handleAddField('number')} className="flex items-center gap-3 px-4 py-3 bg-white border border-pm-secondary/10 rounded-2xl text-[10px] font-black text-pm-dark uppercase tracking-tighter hover:border-pm-primary/40 hover:shadow-premium-lg transition-all"><Hash className="w-4 h-4 text-pm-primary" /> Numérico</button>
                                         <button onClick={() => handleAddField('percentage')} className="flex items-center gap-3 px-4 py-3 bg-white border border-pm-secondary/10 rounded-2xl text-[10px] font-black text-pm-dark uppercase tracking-tighter hover:border-pm-primary/40 hover:shadow-premium-lg transition-all"><Percent className="w-4 h-4 text-pm-primary" /> Percentual</button>
+                                        <button onClick={() => handleAddField('currency')} className="flex items-center gap-3 px-4 py-3 bg-white border border-pm-secondary/10 rounded-2xl text-[10px] font-black text-pm-dark uppercase tracking-tighter hover:border-pm-primary/40 hover:shadow-premium-lg transition-all"><Database className="w-4 h-4 text-pm-primary" /> Valor (R$)</button>
                                         <button onClick={() => handleAddField('image')} className="flex items-center gap-3 px-4 py-3 bg-white border border-pm-secondary/10 rounded-2xl text-[10px] font-black text-pm-dark uppercase tracking-tighter hover:border-pm-primary/40 hover:shadow-premium-lg transition-all"><ImageIcon className="w-4 h-4 text-pm-primary" /> Mídia</button>
                                         <button onClick={() => handleAddField('calculated')} className="flex items-center gap-3 px-4 py-3 bg-pm-primary text-white rounded-2xl text-[10px] font-black uppercase tracking-tighter hover:shadow-xl hover:shadow-pm-primary/20 transition-all border-none"><Calculator className="w-4 h-4" /> Calculado</button>
                                     </div>
@@ -849,6 +1062,9 @@ export default function AdminDynamicForms() {
                                                         </span>
                                                         {f.type === 'calculated' && (
                                                             <span className="text-[8px] font-bold text-pm-secondary uppercase tracking-widest">( Dinâmico )</span>
+                                                        )}
+                                                        {f.type === 'enum' && (
+                                                            <span className="text-[8px] font-bold text-pm-secondary uppercase tracking-widest">({f.enumOptions?.length ?? 0} opções)</span>
                                                         )}
                                                     </div>
                                                 </div>
@@ -918,6 +1134,62 @@ export default function AdminDynamicForms() {
                                     </div>
                                     <Smile className="w-5 h-5 text-pm-secondary/30 group-hover:text-pm-primary transition-colors" />
                                 </button>
+                            </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="input-label">REGIÃO</label>
+                                    <input
+                                        type="text"
+                                        value={editUnitRegion}
+                                        onChange={e => setEditUnitRegion(e.target.value)}
+                                        className="input-field h-14"
+                                        placeholder="Ex: Sudoeste"
+                                    />
+                                </div>
+                                <div>
+                                    <label className="input-label">ASCOM REGIONAL</label>
+                                    <input
+                                        type="text"
+                                        value={editUnitAscom}
+                                        onChange={e => setEditUnitAscom(e.target.value)}
+                                        className="input-field h-14"
+                                        placeholder="Ex: ASCOM Sudoeste"
+                                    />
+                                </div>
+                            </div>
+
+                            <div>
+                                <label className="input-label">SETOR RESPONSÁVEL</label>
+                                <input
+                                    type="text"
+                                    value={editUnitResponsibleSector}
+                                    onChange={e => setEditUnitResponsibleSector(e.target.value)}
+                                    className="input-field h-14"
+                                    placeholder="Ex: DCS, DOP, Coordenação de Saúde..."
+                                />
+                                <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
+                                    Este setor será exibido no dashboard e nos relatórios do tópico.
+                                </p>
+                            </div>
+                            <div>
+                                <label className="input-label">CATEGORIA DO RELATÓRIO</label>
+                                <input
+                                    list="edit-unit-category-options"
+                                    type="text"
+                                    value={editUnitCategory}
+                                    onChange={e => setEditUnitCategory(e.target.value)}
+                                    className="input-field h-14"
+                                    placeholder="Ex: Operacional, Administrativo..."
+                                />
+                                <datalist id="edit-unit-category-options">
+                                    {categoryOptions.map(category => (
+                                        <option key={category} value={category} />
+                                    ))}
+                                </datalist>
+                                <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
+                                    A categoria será aplicada a todas as seções do tópico.
+                                </p>
                             </div>
                         </div>
 
@@ -1007,7 +1279,7 @@ export default function AdminDynamicForms() {
             {/* MODAL DE EDIÇÃO E CRIAÇÃO - CAMPOS */}
             {editingField && (
                 <div className="fixed inset-0 bg-pm-dark/60 backdrop-blur-md z-[55] flex items-center justify-center p-4">
-                    <div className="bg-white rounded-[2rem] shadow-premium-2xl w-full max-w-md p-8 border border-pm-secondary/10 animate-in fade-in zoom-in-95 duration-200">
+                    <div className="bg-white rounded-[2rem] shadow-premium-2xl w-full max-w-md max-h-[90vh] overflow-y-auto p-8 border border-pm-secondary/10 animate-in fade-in zoom-in-95 duration-200 custom-scrollbar">
                         <div className="flex justify-between items-center mb-8">
                             <div>
                                 <h3 className="text-xl font-black text-pm-dark uppercase tracking-tight">
@@ -1045,18 +1317,40 @@ export default function AdminDynamicForms() {
                                         onChange={e => setEditingField({ ...editingField, type: e.target.value as FieldType })}
                                         className="input-field h-14 appearance-none cursor-pointer bg-white"
                                     >
+                                        <option value="calculated">Campo Calculado (Automático)</option>
+                                        <option value="image">Imagens (Upload)</option>
+                                        <option value="enum">Lista de Opções</option>
+                                        <option value="number">Número</option>
+                                        <option value="percentage">Percentual (%)</option>
                                         <option value="text">Texto Curto</option>
                                         <option value="textarea">Texto Longo (Relatos)</option>
-                                        <option value="number">Número Inteiro</option>
-                                        <option value="percentage">Percentual (%)</option>
-                                        <option value="image">Imagens (Upload)</option>
-                                        <option value="calculated">Campo Calculado (Automático)</option>
+                                        <option value="currency">Valor (R$)</option>
                                     </select>
                                     <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-pm-secondary">
                                         <ChevronDown className="w-4 h-4" />
                                     </div>
                                 </div>
                             </div>
+
+                            {editingField.type === 'enum' && (
+                                <div className="space-y-3 bg-pm-primary/5 p-6 rounded-[1.5rem] border border-pm-primary/10">
+                                    <div className="flex items-center gap-2">
+                                        <ClipboardList className="w-4 h-4 text-pm-primary" />
+                                        <label className="text-[10px] font-black text-pm-primary uppercase tracking-widest">
+                                            Itens da lista
+                                        </label>
+                                    </div>
+                                    <textarea
+                                        value={enumOptionsText}
+                                        onChange={event => setEnumOptionsText(event.target.value)}
+                                        className="input-field min-h-32 py-3 resize-y"
+                                        placeholder={'Ex: Em andamento\nConcluído\nNão se aplica'}
+                                    />
+                                    <p className="text-[10px] font-bold text-pm-secondary/70 uppercase tracking-wider">
+                                        Informe uma opção por linha. O usuário poderá selecionar apenas uma opção.
+                                    </p>
+                                </div>
+                            )}
 
                             {editingField.type === 'calculated' && (
                                 <div className="space-y-4 bg-pm-primary/5 p-6 rounded-[1.5rem] border border-pm-primary/10">
@@ -1082,7 +1376,8 @@ export default function AdminDynamicForms() {
                                         </label>
                                         <div className="space-y-2 max-h-40 overflow-y-auto pr-2 custom-scrollbar">
                                             {groupFields
-                                                .filter(f => (f.type === 'number' || f.type === 'percentage') && f.id !== editingField.id)
+                                                .filter(f => (f.type === 'number' || f.type === 'currency' || f.type === 'percentage') && f.id !== editingField.id)
+                                                .sort((a, b) => compareTextPtBr(a.name, b.name))
                                                 .map(f => (
                                                     <label key={f.id} className="flex items-center gap-3 p-3 bg-white border border-pm-secondary/10 rounded-xl cursor-pointer hover:border-pm-primary/40 transition-all group">
                                                         <div className="relative flex items-center justify-center">
@@ -1102,7 +1397,7 @@ export default function AdminDynamicForms() {
                                                         <span className="text-xs font-bold text-pm-dark group-hover:text-pm-primary transition-colors">{f.name}</span>
                                                     </label>
                                                 ))}
-                                            {groupFields.filter(f => f.type === 'number' || f.type === 'percentage').length === 0 && (
+                                            {groupFields.filter(f => f.type === 'number' || f.type === 'currency' || f.type === 'percentage').length === 0 && (
                                                 <div className="text-center py-4 bg-white/50 rounded-xl border border-dashed border-pm-secondary/20">
                                                     <p className="text-[10px] text-pm-secondary/60 font-medium">Nenhuma variável numérica encontrada.</p>
                                                 </div>
@@ -1206,25 +1501,67 @@ export default function AdminDynamicForms() {
                                     placeholder="Ex: Recursos Logísticos"
                                 />
                             </div>
-                            <div>
-                                <label className="input-label">CATEGORIA DO RELATÓRIO</label>
-                                <input
-                                    list="edit-category-options"
-                                    type="text"
-                                    value={editGroupCategory}
-                                    onChange={e => setEditGroupCategory(e.target.value)}
-                                    className="input-field h-14"
-                                    placeholder="Ex: Operacional, Administrativo..."
-                                />
-                                <datalist id="edit-category-options">
-                                    {categoryOptions.map(category => (
-                                        <option key={category} value={category} />
-                                    ))}
-                                </datalist>
-                                <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
-                                    Seções com a mesma categoria aparecem juntas no relatório.
+                            {editingGroup.mode === 'snapshot' && (
+                                <div>
+                                    <label className="input-label">EXIBIÇÃO NO RELATÓRIO</label>
+                                    <select
+                                        value={editGroupReportLayout}
+                                        onChange={e => {
+                                            const layout = e.target.value as DataGroupReportLayout;
+                                            setEditGroupReportLayout(layout);
+                                            if (layout === 'text') setEditGroupUpdateFrequency('fixed');
+                                        }}
+                                        className="input-field h-14"
+                                    >
+                                        <option value="table">Tabela de indicadores</option>
+                                        <option value="text">Texto livre / Observações</option>
+                                    </select>
+                                </div>
+                            )}
+                            {editingGroup.mode === 'snapshot' && editGroupReportLayout === 'table' && (
+                                <div>
+                                    <label className="input-label">PERIODICIDADE DOS DADOS</label>
+                                    <select
+                                        value={editGroupUpdateFrequency}
+                                        onChange={e => setEditGroupUpdateFrequency(e.target.value as DataGroupUpdateFrequency)}
+                                        className="input-field h-14"
+                                    >
+                                        <option value="fixed">Cadastro fixo / sem comparativo</option>
+                                        <option value="yearly">Comparativo anual (2023 em diante)</option>
+                                    </select>
+                                </div>
+                            )}
+                            {editingGroup.mode === 'snapshot' && editGroupReportLayout === 'table' && editGroupUpdateFrequency === 'yearly' && (
+                                <div>
+                                    <label className="input-label">TOTAL NO RELATÓRIO</label>
+                                    <select
+                                        value={editGroupShowTotal ? 'show' : 'hide'}
+                                        onChange={e => setEditGroupShowTotal(e.target.value === 'show')}
+                                        className="input-field h-14"
+                                    >
+                                        <option value="show">Exibir total</option>
+                                        <option value="hide">Ocultar total</option>
+                                    </select>
+                                </div>
+                            )}
+                            {editingGroup.mode === 'collection' && (
+                                <div>
+                                    <label className="input-label">EXIBIÇÃO NO RELATÓRIO</label>
+                                    <select
+                                        value={editGroupCollectionLayout}
+                                        onChange={e => setEditGroupCollectionLayout(e.target.value as DataGroupCollectionLayout)}
+                                        className="input-field h-14"
+                                    >
+                                        <option value="narrative">Resumo atual</option>
+                                        <option value="table">Tabela por colunas</option>
+                                    </select>
+                                </div>
+                            )}
+                            {groupError && (
+                                <p className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-bold text-red-600">
+                                    {groupError}
                                 </p>
-                            </div>
+                            )}
                         </div>
 
                         <div className="mt-10 flex flex-col gap-3">

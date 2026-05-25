@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../../../store/AuthContext';
 import {
     ArrowDown,
@@ -8,22 +8,118 @@ import {
     ChevronDown,
     ChevronRight,
     ClipboardCheck,
+    Eye,
+    GalleryHorizontalEnd,
     FileText,
     Filter,
     Layers3,
     ListChecks,
+    Loader2,
     Plus,
     Printer,
+    Save,
     Search,
+    SlidersHorizontal,
     Square,
     X
 } from 'lucide-react';
 import { useReactToPrint } from 'react-to-print';
 import ReportPdfRenderer from './ReportPdfRenderer';
+import ReportPresentationRenderer from './ReportPresentationRenderer';
+import { supabase } from '../../../lib/supabase';
+import { compareTextPtBr, sortByTextPtBr } from '../../../utils/textOrdering';
+
+type ReportHighlightTarget = 'row' | 'column' | 'cell';
+type ReportHighlightColor = 'khaki' | 'blue' | 'green' | 'amber' | 'red';
+type ReportTableHighlightRule = {
+    id: string;
+    groupId: string;
+    target: ReportHighlightTarget;
+    rowIndex?: number;
+    columnIndex?: number;
+    color: ReportHighlightColor;
+};
+
+type SavedReportConfiguration = {
+    selectedUnits: string[];
+    selectedGroups: string[];
+    customCategories: string[];
+    categoryOrder: string[];
+    unitOrder: string[];
+    groupOrder: string[];
+    groupAssignments: Record<string, string>;
+    reportFormat: 'technical' | 'presentation';
+    fontSize: 'standard' | 'large';
+    technicalSections: {
+        showExecutiveSummary: boolean;
+        showSubjectMap: boolean;
+    };
+    tableHighlights?: ReportTableHighlightRule[];
+};
+
+const getStringArray = (value: unknown) =>
+    Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+
+const REPORT_HIGHLIGHT_COLORS: Array<{ value: ReportHighlightColor; label: string; swatch: string }> = [
+    { value: 'khaki', label: 'Dourado suave', swatch: 'bg-[#eee7bf]' },
+    { value: 'blue', label: 'Azul', swatch: 'bg-blue-100' },
+    { value: 'green', label: 'Verde', swatch: 'bg-emerald-100' },
+    { value: 'amber', label: 'Amarelo', swatch: 'bg-amber-100' },
+    { value: 'red', label: 'Vermelho', swatch: 'bg-red-100' }
+];
+const REPORT_HIGHLIGHT_TARGET_LABELS: Record<ReportHighlightTarget, string> = {
+    row: 'Linha',
+    column: 'Coluna',
+    cell: 'Célula'
+};
+const isReportHighlightTarget = (value: unknown): value is ReportHighlightTarget =>
+    value === 'row' || value === 'column' || value === 'cell';
+const isReportHighlightColor = (value: unknown): value is ReportHighlightColor =>
+    REPORT_HIGHLIGHT_COLORS.some(color => color.value === value);
+
+const normalizeRegionalKey = (value?: string | null) =>
+    (value || '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[_\-\s]+/g, ' ')
+        .trim()
+        .toLowerCase();
+
+const FALLBACK_REGIONAL_COMMAND_KEYS = new Set([
+    'cprms',
+    'atlantico',
+    'baia de todos os santos',
+    'central',
+    'norte',
+    'sul',
+    'leste',
+    'sudoeste',
+    'oeste',
+    'chapada',
+    'cpme',
+    'comando de operacoes especializadas'
+]);
+
+function isRegionalCommandAsUnit(
+    unit: { name: string },
+    regionalCommands: Array<{ code: string; name: string }>
+) {
+    const unitName = normalizeRegionalKey(unit.name);
+    const commandKeys = new Set([
+        ...regionalCommands.flatMap(command => [
+            normalizeRegionalKey(command.code),
+            normalizeRegionalKey(command.name)
+        ]),
+        ...FALLBACK_REGIONAL_COMMAND_KEYS
+    ]);
+
+    return commandKeys.has(unitName);
+}
 
 export default function ReportBuilderModal({ onClose }: { onClose: () => void }) {
-    const { units: allUnits, dataGroups, user } = useAuth();
-    const units = user?.role === 'editor' && user.unitId ? allUnits.filter(u => u.id === user.unitId) : allUnits;
+    const { units: allUnits, regionalCommands, dataGroups, user } = useAuth();
+    const reportUnits = sortByTextPtBr(allUnits.filter(unit => !isRegionalCommandAsUnit(unit, regionalCommands)), unit => unit.name);
+    const units = user?.role === 'editor' && user.unitId ? reportUnits.filter(u => u.id === user.unitId) : reportUnits;
     const visibleUnitIds = units.map(unit => unit.id);
     const visibleDataGroups = dataGroups.filter(group => visibleUnitIds.includes(group.unitId));
 
@@ -38,12 +134,171 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
     const [groupAssignments, setGroupAssignments] = useState<Record<string, string>>({});
     const [newCategoryName, setNewCategoryName] = useState('');
     const [searchTerm, setSearchTerm] = useState('');
+    const [reportMode, setReportMode] = useState<'builder' | 'preview'>('builder');
+    const [reportFormat, setReportFormat] = useState<'technical' | 'presentation'>('technical');
+    const [fontSize, setFontSize] = useState<'standard' | 'large'>('standard');
+    const [technicalSections, setTechnicalSections] = useState({
+        showExecutiveSummary: true,
+        showSubjectMap: true
+    });
+    const [tableHighlights, setTableHighlights] = useState<ReportTableHighlightRule[]>([]);
+    const [highlightEditingGroupId, setHighlightEditingGroupId] = useState('');
+    const [highlightTarget, setHighlightTarget] = useState<ReportHighlightTarget>('row');
+    const [highlightRow, setHighlightRow] = useState(1);
+    const [highlightColumn, setHighlightColumn] = useState(1);
+    const [highlightColor, setHighlightColor] = useState<ReportHighlightColor>('khaki');
+    const [isSavingHighlight, setIsSavingHighlight] = useState(false);
+    const [isLoadingSavedModel, setIsLoadingSavedModel] = useState(false);
+    const [isSavingModel, setIsSavingModel] = useState(false);
+    const [modelMessage, setModelMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+    const [modelReloadRequest, setModelReloadRequest] = useState(0);
 
     const printRef = useRef<HTMLDivElement>(null);
+    const loadedConfigurationUserId = useRef<string | null>(null);
+
+    useEffect(() => {
+        let isActive = true;
+
+        const loadSavedConfiguration = async () => {
+            if (!user?.id) {
+                loadedConfigurationUserId.current = null;
+                if (isActive) setIsLoadingSavedModel(false);
+                return;
+            }
+            if (loadedConfigurationUserId.current === user.id) return;
+            if (allUnits.length === 0 || dataGroups.length === 0) {
+                setIsLoadingSavedModel(false);
+                return;
+            }
+
+            setIsLoadingSavedModel(true);
+            setModelMessage(null);
+            let timeoutId: ReturnType<typeof setTimeout> | undefined;
+            try {
+                const [configurationResult, highlightResult] = await Promise.race([
+                    Promise.all([
+                        supabase
+                            .from('report_configurations')
+                            .select('configuration')
+                            .eq('user_id', user.id)
+                            .maybeSingle(),
+                        supabase
+                            .from('report_table_highlights')
+                            .select('id, data_group_id, target, row_index, column_index, color')
+                            .eq('user_id', user.id)
+                    ]),
+                    new Promise<never>((_, reject) => {
+                        timeoutId = setTimeout(() => reject(new Error('Tempo excedido ao carregar modelo.')), 10000);
+                    })
+                ]);
+
+                if (!isActive) return;
+                if (configurationResult.error) throw configurationResult.error;
+                if (highlightResult.error) throw highlightResult.error;
+
+                loadedConfigurationUserId.current = user.id;
+                const data = configurationResult.data;
+                const configuration = (data?.configuration || {}) as Partial<SavedReportConfiguration>;
+                const allowedUnitIds = new Set(visibleUnitIds);
+                const allowedGroupIds = new Set(visibleDataGroups.map(group => group.id));
+                const restoredUnits = getStringArray(configuration.selectedUnits).filter(id => allowedUnitIds.has(id));
+                const restoredGroups = getStringArray(configuration.selectedGroups).filter(id => allowedGroupIds.has(id));
+                const assignments = configuration.groupAssignments && typeof configuration.groupAssignments === 'object'
+                    ? Object.fromEntries(
+                        Object.entries(configuration.groupAssignments)
+                            .filter(([unitId, category]) => allowedUnitIds.has(unitId) && typeof category === 'string')
+                    )
+                    : {};
+
+                setSelectedUnits(restoredUnits);
+                setSelectedGroups(restoredGroups);
+                setCustomCategories(getStringArray(configuration.customCategories));
+                setCategoryOrder(getStringArray(configuration.categoryOrder));
+                setUnitOrder(getStringArray(configuration.unitOrder).filter(id => restoredUnits.includes(id)));
+                setGroupOrder(getStringArray(configuration.groupOrder).filter(id => restoredGroups.includes(id)));
+                setGroupAssignments(assignments);
+                setExpandedUnits(restoredUnits);
+                setReportFormat(configuration.reportFormat === 'presentation' ? 'presentation' : 'technical');
+                setFontSize(configuration.fontSize === 'large' ? 'large' : 'standard');
+                setTechnicalSections({
+                    showExecutiveSummary: configuration.technicalSections?.showExecutiveSummary !== false,
+                    showSubjectMap: configuration.technicalSections?.showSubjectMap !== false
+                });
+                const legacyHighlights = Array.isArray(configuration.tableHighlights)
+                    ? configuration.tableHighlights.filter((rule): rule is ReportTableHighlightRule => {
+                        if (!rule || typeof rule !== 'object') return false;
+                        return typeof rule.id === 'string'
+                            && typeof rule.groupId === 'string'
+                            && allowedGroupIds.has(rule.groupId)
+                            && isReportHighlightTarget(rule.target)
+                            && isReportHighlightColor(rule.color)
+                            && (rule.rowIndex === undefined || (Number.isInteger(rule.rowIndex) && rule.rowIndex >= 0))
+                            && (rule.columnIndex === undefined || (Number.isInteger(rule.columnIndex) && rule.columnIndex >= 0));
+                    })
+                    : [];
+                const persistedHighlights = (highlightResult.data || [])
+                    .filter(rule => allowedGroupIds.has(rule.data_group_id) && isReportHighlightTarget(rule.target) && isReportHighlightColor(rule.color))
+                    .map(rule => ({
+                        id: rule.id,
+                        groupId: rule.data_group_id,
+                        target: rule.target as ReportHighlightTarget,
+                        rowIndex: rule.row_index >= 0 ? rule.row_index : undefined,
+                        columnIndex: rule.column_index >= 0 ? rule.column_index : undefined,
+                        color: rule.color as ReportHighlightColor
+                    }));
+                const restoredHighlights = persistedHighlights.length > 0 ? persistedHighlights : legacyHighlights;
+                setTableHighlights(restoredHighlights);
+                if (persistedHighlights.length === 0 && legacyHighlights.length > 0) {
+                    const { data: migratedHighlights, error } = await supabase.from('report_table_highlights').upsert(
+                        legacyHighlights.map(rule => ({
+                            user_id: user.id,
+                            data_group_id: rule.groupId,
+                            target: rule.target,
+                            row_index: rule.rowIndex ?? -1,
+                            column_index: rule.columnIndex ?? -1,
+                            color: rule.color,
+                            updated_at: new Date().toISOString()
+                        })),
+                        { onConflict: 'user_id,data_group_id,target,row_index,column_index' }
+                    ).select('id, data_group_id, target, row_index, column_index, color');
+                    if (error) throw error;
+                    setTableHighlights((migratedHighlights || []).map(rule => ({
+                        id: rule.id,
+                        groupId: rule.data_group_id,
+                        target: rule.target as ReportHighlightTarget,
+                        rowIndex: rule.row_index >= 0 ? rule.row_index : undefined,
+                        columnIndex: rule.column_index >= 0 ? rule.column_index : undefined,
+                        color: rule.color as ReportHighlightColor
+                    })));
+                }
+                setModelMessage(data?.configuration
+                    ? { type: 'success', text: 'Modelo salvo carregado.' }
+                    : { type: 'success', text: 'Nenhum modelo salvo encontrado. Monte o relatório e salve seu modelo.' });
+            } catch (error) {
+                if (!isActive) return;
+                loadedConfigurationUserId.current = null;
+                console.error('Falha ao carregar modelo de relatório:', error);
+                setModelMessage({ type: 'error', text: 'Não foi possível carregar o modelo salvo. Tente recarregar.' });
+            } finally {
+                if (timeoutId) clearTimeout(timeoutId);
+                if (isActive) setIsLoadingSavedModel(false);
+            }
+        };
+
+        loadSavedConfiguration();
+        return () => {
+            isActive = false;
+        };
+    }, [user?.id, allUnits.length, dataGroups.length, modelReloadRequest]);
+
+    const reloadSavedModel = () => {
+        loadedConfigurationUserId.current = null;
+        setModelReloadRequest(previous => previous + 1);
+    };
 
     const handlePrint = useReactToPrint({
         contentRef: printRef,
-        documentTitle: `Relatório Executivo PMBA - ${new Date().toISOString().split('T')[0]}`
+        documentTitle: `Briefing Geral PMBA - ${new Date().toISOString().split('T')[0]}`
     });
 
     const appendGroupsToOrder = (groupIds: string[]) => {
@@ -116,9 +371,13 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
         setGroupAssignments({});
     };
 
-    const getGroupCategory = (group: { id: string; categoryTitle?: string | null }) => (
-        groupAssignments[group.id] || group.categoryTitle?.trim() || 'Geral'
-    );
+    const getLegacyCategory = (unitId: string) => visibleDataGroups
+        .filter(group => group.unitId === unitId && group.categoryTitle?.trim())
+        .sort((a, b) => (a.categoryOrder ?? 999) - (b.categoryOrder ?? 999) || a.order - b.order)[0]?.categoryTitle?.trim();
+    const getTopicCategory = (unitId: string) => {
+        const unit = units.find(item => item.id === unitId);
+        return groupAssignments[unitId] || unit?.reportCategoryTitle?.trim() || getLegacyCategory(unitId) || 'Geral';
+    };
 
     const getGroupOrderIndex = (groupId: string) => {
         const index = groupOrder.indexOf(groupId);
@@ -127,7 +386,13 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
 
     const selectedGroupObjects = visibleDataGroups
         .filter(group => selectedGroups.includes(group.id))
-        .sort((a, b) => getGroupOrderIndex(a.id) - getGroupOrderIndex(b.id) || (a.categoryOrder ?? 999) - (b.categoryOrder ?? 999) || a.order - b.order);
+        .sort((a, b) => getGroupOrderIndex(a.id) - getGroupOrderIndex(b.id) || a.order - b.order);
+
+    useEffect(() => {
+        if (highlightEditingGroupId && !selectedGroups.includes(highlightEditingGroupId)) {
+            setHighlightEditingGroupId('');
+        }
+    }, [highlightEditingGroupId, selectedGroups]);
 
     const getUnitOrderIndex = (unitId: string) => {
         const index = unitOrder.indexOf(unitId);
@@ -141,12 +406,6 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
     const selectedUnitObjects = units
         .filter(unit => selectedUnits.includes(unit.id) && getGroupsForUnit(unit.id).length > 0)
         .sort((a, b) => getUnitOrderIndex(a.id) - getUnitOrderIndex(b.id) || (a.order_index ?? 999) - (b.order_index ?? 999));
-
-    const getTopicCategory = (unitId: string) => {
-        const unitGroups = getGroupsForUnit(unitId);
-        const categories = Array.from(new Set(unitGroups.map(getGroupCategory)));
-        return categories[0] || 'Geral';
-    };
 
     const baseReportCategories = Array.from(new Set([
         ...selectedUnitObjects.map(unit => getTopicCategory(unit.id)),
@@ -170,11 +429,12 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
             groups: visibleDataGroups.filter(group => {
                 if (group.unitId !== unit.id) return false;
                 if (!normalizedSearch) return true;
-                const haystack = `${unit.name} ${unit.full_name || ''} ${group.title} ${group.categoryTitle || ''}`.toLowerCase();
+                const haystack = `${unit.name} ${group.title} ${getTopicCategory(unit.id)}`.toLowerCase();
                 return haystack.includes(normalizedSearch);
-            })
+            }).sort((a, b) => compareTextPtBr(a.title, b.title))
         }))
-        .filter(item => !normalizedSearch || item.groups.length > 0 || item.unit.name.toLowerCase().includes(normalizedSearch));
+        .filter(item => !normalizedSearch || item.groups.length > 0 || item.unit.name.toLowerCase().includes(normalizedSearch))
+        .sort((a, b) => compareTextPtBr(a.unit.name, b.unit.name));
 
     const addCategory = () => {
         const category = newCategoryName.trim();
@@ -226,10 +486,9 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
     };
 
     const assignTopicCategory = (unitId: string, category: string) => {
-        const unitGroupIds = getGroupsForUnit(unitId).map(group => group.id);
         setGroupAssignments(prev => ({
             ...prev,
-            ...Object.fromEntries(unitGroupIds.map(groupId => [groupId, category]))
+            [unitId]: category
         }));
         setCategoryOrder(prev => prev.includes(category) ? prev : [...prev, category]);
     };
@@ -238,6 +497,133 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
     const collectionCount = selectedGroupObjects.filter(group => group.mode === 'collection').length;
     const snapshotCount = selectedGroupObjects.length - collectionCount;
     const isPrintable = selectedUnits.length > 0 && selectedGroups.length > 0;
+    const sharedReportConfig = {
+        groupAssignments,
+        categoryOrder: reportCategories,
+        unitOrder,
+        groupOrder,
+        tableHighlights: tableHighlights.filter(rule => selectedGroups.includes(rule.groupId))
+    };
+    const toggleTechnicalSection = (section: keyof typeof technicalSections) => {
+        setTechnicalSections(prev => ({
+            ...prev,
+            [section]: !prev[section]
+        }));
+    };
+
+    const addTableHighlight = async (groupId: string) => {
+        if (!user?.id) {
+            setModelMessage({ type: 'error', text: 'Usuário não identificado para salvar a cor.' });
+            return;
+        }
+
+        const rowIndex = highlightTarget === 'column' ? undefined : Math.max(0, highlightRow - 1);
+        const columnIndex = highlightTarget === 'row' ? undefined : Math.max(0, highlightColumn - 1);
+        setIsSavingHighlight(true);
+        setModelMessage(null);
+        try {
+            const { data, error } = await supabase
+                .from('report_table_highlights')
+                .upsert({
+                    user_id: user.id,
+                    data_group_id: groupId,
+                    target: highlightTarget,
+                    row_index: rowIndex ?? -1,
+                    column_index: columnIndex ?? -1,
+                    color: highlightColor,
+                    updated_at: new Date().toISOString()
+                }, { onConflict: 'user_id,data_group_id,target,row_index,column_index' })
+                .select('id')
+                .single();
+
+            if (error) throw error;
+            const rule: ReportTableHighlightRule = {
+                id: data.id,
+                groupId,
+                target: highlightTarget,
+                rowIndex,
+                columnIndex,
+                color: highlightColor
+            };
+            setTableHighlights(previous => [
+                ...previous.filter(item => !(
+                    item.groupId === rule.groupId
+                    && item.target === rule.target
+                    && item.rowIndex === rule.rowIndex
+                    && item.columnIndex === rule.columnIndex
+                )),
+                rule
+            ]);
+            setModelMessage({ type: 'success', text: 'Cor da tabela salva.' });
+        } catch (error) {
+            console.error('Falha ao salvar cor do relatório:', error);
+            setModelMessage({ type: 'error', text: 'Não foi possível salvar a cor da tabela.' });
+        } finally {
+            setIsSavingHighlight(false);
+        }
+    };
+
+    const removeTableHighlight = async (ruleId: string) => {
+        if (!user?.id) return;
+
+        setIsSavingHighlight(true);
+        setModelMessage(null);
+        try {
+            const { error } = await supabase
+                .from('report_table_highlights')
+                .delete()
+                .eq('id', ruleId)
+                .eq('user_id', user.id);
+            if (error) throw error;
+            setTableHighlights(previous => previous.filter(rule => rule.id !== ruleId));
+            setModelMessage({ type: 'success', text: 'Cor removida.' });
+        } catch (error) {
+            console.error('Falha ao remover cor do relatório:', error);
+            setModelMessage({ type: 'error', text: 'Não foi possível remover a cor da tabela.' });
+        } finally {
+            setIsSavingHighlight(false);
+        }
+    };
+
+    const saveReportConfiguration = async () => {
+        if (!user?.id) {
+            setModelMessage({ type: 'error', text: 'Usuário não identificado para salvar o modelo.' });
+            return;
+        }
+
+        const configuration: SavedReportConfiguration = {
+            selectedUnits: selectedUnits.filter(id => visibleUnitIds.includes(id)),
+            selectedGroups: selectedGroups.filter(id => visibleDataGroups.some(group => group.id === id)),
+            customCategories,
+            categoryOrder: reportCategories,
+            unitOrder: unitOrder.filter(id => selectedUnits.includes(id)),
+            groupOrder: groupOrder.filter(id => selectedGroups.includes(id)),
+            groupAssignments: Object.fromEntries(
+                Object.entries(groupAssignments).filter(([unitId]) => visibleUnitIds.includes(unitId))
+            ),
+            reportFormat,
+            fontSize,
+            technicalSections
+        };
+
+        setIsSavingModel(true);
+        setModelMessage(null);
+        try {
+            const { error } = await supabase
+                .from('report_configurations')
+                .upsert({
+                    user_id: user.id,
+                    configuration,
+                    updated_at: new Date().toISOString()
+                }, { onConflict: 'user_id' });
+
+            setModelMessage(error
+                ? { type: 'error', text: 'Falha ao salvar o modelo de relatório.' }
+                : { type: 'success', text: 'Modelo de relatório salvo.' });
+        } finally {
+            setIsSavingModel(false);
+        }
+    };
 
     return (
         <div className="fixed inset-0 bg-pm-dark/70 backdrop-blur-sm z-50 flex items-center justify-center p-2 md:p-4">
@@ -250,10 +636,10 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                                 Impressão executiva
                             </div>
                             <h2 className="text-2xl font-black text-pm-dark tracking-tight mt-1">
-                                Gerenciador de Relatório
+                                Gerenciador do Briefing Geral
                             </h2>
                             <p className="text-sm text-pm-secondary mt-1">
-                                Monte a estrutura final do PDF por categorias, ordem de leitura e seções selecionadas.
+                                Monte apenas o briefing geral por categorias, ordem de leitura e seções selecionadas.
                             </p>
                         </div>
                         <button onClick={onClose} className="text-pm-secondary hover:text-pm-dark p-2 hover:bg-pm-light rounded-full transition-colors">
@@ -261,7 +647,8 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                         </button>
                     </div>
 
-                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 mt-4">
+                    <div className="flex flex-col lg:flex-row lg:flex-wrap 2xl:flex-nowrap lg:items-end justify-between gap-4 mt-4">
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 flex-1">
                         <div className="bg-[#ede7d2] border border-[#d7ca9a] rounded-lg px-3 py-2.5">
                             <span className="text-[10px] uppercase tracking-widest font-black text-pm-secondary flex items-center gap-1.5">
                                 <Building2 className="w-3.5 h-3.5" /> Tópicos
@@ -286,9 +673,76 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                             </span>
                             <strong className="text-sm text-pm-dark leading-none mt-2 block">{snapshotCount} indicadores / {collectionCount} listas</strong>
                         </div>
+                        </div>
+
+                        <div className="bg-pm-light border border-pm-secondary/15 rounded-xl p-1 flex shrink-0">
+                            <button
+                                onClick={() => setReportFormat('technical')}
+                                className={`px-3 py-2 rounded-lg text-xs font-black uppercase flex items-center gap-1.5 transition-colors ${reportFormat === 'technical' ? 'bg-white text-pm-dark shadow-sm' : 'text-pm-secondary hover:text-pm-dark'}`}
+                            >
+                                <FileText className="w-3.5 h-3.5" /> Técnico
+                            </button>
+                            <button
+                                onClick={() => setReportFormat('presentation')}
+                                className={`px-3 py-2 rounded-lg text-xs font-black uppercase flex items-center gap-1.5 transition-colors ${reportFormat === 'presentation' ? 'bg-white text-pm-dark shadow-sm' : 'text-pm-secondary hover:text-pm-dark'}`}
+                            >
+                                <GalleryHorizontalEnd className="w-3.5 h-3.5" /> Apresentação
+                            </button>
+                        </div>
+
+                        <div className="bg-pm-light border border-pm-secondary/15 rounded-xl p-1 flex shrink-0" aria-label="Tamanho da fonte no relatório">
+                            <button
+                                onClick={() => setFontSize('standard')}
+                                className={`px-3 py-2 rounded-lg text-xs font-black uppercase transition-colors ${fontSize === 'standard' ? 'bg-white text-pm-dark shadow-sm' : 'text-pm-secondary hover:text-pm-dark'}`}
+                            >
+                                Fonte padrão
+                            </button>
+                            <button
+                                onClick={() => setFontSize('large')}
+                                className={`px-3 py-2 rounded-lg text-xs font-black uppercase transition-colors ${fontSize === 'large' ? 'bg-white text-pm-dark shadow-sm' : 'text-pm-secondary hover:text-pm-dark'}`}
+                            >
+                                Fonte ampliada
+                            </button>
+                        </div>
+
+                        {reportFormat === 'technical' && (
+                            <div className="bg-white border border-pm-secondary/15 rounded-xl p-2 flex flex-col sm:flex-row gap-1.5 shrink-0">
+                                <button
+                                    onClick={() => toggleTechnicalSection('showExecutiveSummary')}
+                                    className="px-2.5 py-1.5 rounded-lg text-[11px] font-black uppercase flex items-center gap-1.5 text-pm-dark hover:bg-pm-light transition-colors"
+                                >
+                                    {technicalSections.showExecutiveSummary ? <CheckSquare className="w-3.5 h-3.5 text-pm-primary" /> : <Square className="w-3.5 h-3.5 text-pm-secondary" />}
+                                    Resumo executivo
+                                </button>
+                                <button
+                                    onClick={() => toggleTechnicalSection('showSubjectMap')}
+                                    className="px-2.5 py-1.5 rounded-lg text-[11px] font-black uppercase flex items-center gap-1.5 text-pm-dark hover:bg-pm-light transition-colors"
+                                >
+                                    {technicalSections.showSubjectMap ? <CheckSquare className="w-3.5 h-3.5 text-pm-primary" /> : <Square className="w-3.5 h-3.5 text-pm-secondary" />}
+                                    Mapa de assuntos
+                                </button>
+                            </div>
+                        )}
+
+                        <div className="bg-pm-light border border-pm-secondary/15 rounded-xl p-1 flex shrink-0">
+                            <button
+                                onClick={() => setReportMode('builder')}
+                                className={`px-3 py-2 rounded-lg text-xs font-black uppercase flex items-center gap-1.5 transition-colors ${reportMode === 'builder' ? 'bg-white text-pm-dark shadow-sm' : 'text-pm-secondary hover:text-pm-dark'}`}
+                            >
+                                <SlidersHorizontal className="w-3.5 h-3.5" /> Montagem
+                            </button>
+                            <button
+                                onClick={() => setReportMode('preview')}
+                                disabled={!isPrintable}
+                                className={`px-3 py-2 rounded-lg text-xs font-black uppercase flex items-center gap-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${reportMode === 'preview' ? 'bg-white text-pm-dark shadow-sm' : 'text-pm-secondary hover:text-pm-dark'}`}
+                            >
+                                <Eye className="w-3.5 h-3.5" /> Prévia A4
+                            </button>
+                        </div>
                     </div>
                 </div>
 
+                {reportMode === 'builder' ? (
                 <div
                     className="grid gap-0 flex-1 min-h-0 overflow-hidden"
                     style={{ gridTemplateColumns: '340px minmax(0, 1fr)' }}
@@ -372,7 +826,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                                                                 <span className="min-w-0 flex-1">
                                                                     <span className="text-sm font-bold text-pm-dark block truncate">{group.title}</span>
                                                                     <span className="text-[10px] uppercase tracking-wider font-bold text-pm-secondary">
-                                                                        {group.categoryTitle?.trim() || 'Geral'} · {group.mode === 'collection' ? 'Lista' : 'Indicadores'}
+                                                                        {getTopicCategory(unit.id)} · {group.mode === 'collection' ? 'Lista' : 'Indicadores'}
                                                                     </span>
                                                                 </span>
                                                             </button>
@@ -491,6 +945,10 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                                                     const currentCategory = getTopicCategory(topic.id);
                                                     const collectionGroups = topicGroups.filter(group => group.mode === 'collection').length;
                                                     const indicatorGroups = topicGroups.length - collectionGroups;
+                                                    const highlightedGroup = topicGroups.find(group => group.id === highlightEditingGroupId && group.reportLayout !== 'text');
+                                                    const highlightedGroupRules = highlightedGroup
+                                                        ? tableHighlights.filter(rule => rule.groupId === highlightedGroup.id)
+                                                        : [];
 
                                                     return (
                                                         <div key={topic.id} className="border border-pm-secondary/10 rounded-xl bg-[#fbfaf6] hover:bg-white transition-colors overflow-hidden">
@@ -510,7 +968,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                                                                     onChange={event => assignTopicCategory(topic.id, event.target.value)}
                                                                     className="col-start-2 xl:col-start-auto border border-pm-secondary/20 rounded-lg px-2 py-2 text-xs font-bold text-pm-dark bg-white"
                                                                 >
-                                                                    {reportCategories.map(option => (
+                                                                    {[...reportCategories].sort(compareTextPtBr).map(option => (
                                                                         <option key={option} value={option}>{option}</option>
                                                                     ))}
                                                                 </select>
@@ -537,11 +995,124 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                                                                 <p className="text-[10px] uppercase tracking-widest font-black text-pm-secondary mb-2">Seções incluídas neste tópico</p>
                                                                 <div className="flex flex-wrap gap-1.5">
                                                                     {topicGroups.map(group => (
-                                                                        <span key={group.id} className="px-2 py-1 rounded-md bg-pm-light text-[11px] font-bold text-pm-dark border border-pm-secondary/10">
-                                                                            {group.title}
-                                                                        </span>
+                                                                        <div key={group.id} className="flex items-center overflow-hidden rounded-md bg-pm-light border border-pm-secondary/10">
+                                                                            <span className="px-2 py-1 text-[11px] font-bold text-pm-dark">{group.title}</span>
+                                                                            {reportFormat === 'technical' && group.reportLayout !== 'text' && (
+                                                                                <button
+                                                                                    onClick={() => setHighlightEditingGroupId(current => current === group.id ? '' : group.id)}
+                                                                                    className={`px-2 py-1 text-[10px] font-black uppercase border-l border-pm-secondary/10 transition-colors ${highlightEditingGroupId === group.id ? 'bg-pm-primary text-white' : 'text-pm-secondary hover:bg-white hover:text-pm-dark'}`}
+                                                                                >
+                                                                                    Cor
+                                                                                </button>
+                                                                            )}
+                                                                        </div>
                                                                     ))}
                                                                 </div>
+                                                                {reportFormat === 'technical' && highlightedGroup && (
+                                                                    <div className="mt-3 rounded-xl border border-pm-secondary/15 bg-[#fbfaf6] p-3">
+                                                                        <div className="flex items-start justify-between gap-3 mb-3">
+                                                                            <div>
+                                                                                <p className="text-[10px] uppercase tracking-widest font-black text-pm-secondary">Destaque de tabela</p>
+                                                                                <p className="text-sm font-black text-pm-dark">{highlightedGroup.title}</p>
+                                                                            </div>
+                                                                            <button
+                                                                                onClick={() => setHighlightEditingGroupId('')}
+                                                                                className="p-1.5 rounded-md text-pm-secondary hover:text-pm-dark hover:bg-white"
+                                                                                aria-label="Fechar configuração de cor"
+                                                                            >
+                                                                                <X className="w-4 h-4" />
+                                                                            </button>
+                                                                        </div>
+                                                                        <div className="grid grid-cols-2 xl:grid-cols-[140px,110px,110px,180px,auto] gap-2 items-end">
+                                                                            <label className="text-[10px] uppercase tracking-wide font-black text-pm-secondary">
+                                                                                Aplicar em
+                                                                                <select
+                                                                                    value={highlightTarget}
+                                                                                    onChange={event => setHighlightTarget(event.target.value as ReportHighlightTarget)}
+                                                                                    className="block mt-1 w-full border border-pm-secondary/20 rounded-lg px-2 py-2 text-xs font-bold text-pm-dark bg-white"
+                                                                                >
+                                                                                    <option value="row">Linha</option>
+                                                                                    <option value="column">Coluna</option>
+                                                                                    <option value="cell">Célula</option>
+                                                                                </select>
+                                                                            </label>
+                                                                            {highlightTarget !== 'column' && (
+                                                                                <label className="text-[10px] uppercase tracking-wide font-black text-pm-secondary">
+                                                                                    Linha
+                                                                                    <input
+                                                                                        type="number"
+                                                                                        min={1}
+                                                                                        value={highlightRow}
+                                                                                        onChange={event => setHighlightRow(Math.max(1, Number(event.target.value) || 1))}
+                                                                                        className="block mt-1 w-full border border-pm-secondary/20 rounded-lg px-2 py-2 text-xs font-bold text-pm-dark bg-white"
+                                                                                    />
+                                                                                </label>
+                                                                            )}
+                                                                            {highlightTarget !== 'row' && (
+                                                                                <label className="text-[10px] uppercase tracking-wide font-black text-pm-secondary">
+                                                                                    Coluna
+                                                                                    <input
+                                                                                        type="number"
+                                                                                        min={1}
+                                                                                        value={highlightColumn}
+                                                                                        onChange={event => setHighlightColumn(Math.max(1, Number(event.target.value) || 1))}
+                                                                                        className="block mt-1 w-full border border-pm-secondary/20 rounded-lg px-2 py-2 text-xs font-bold text-pm-dark bg-white"
+                                                                                    />
+                                                                                </label>
+                                                                            )}
+                                                                            <label className="text-[10px] uppercase tracking-wide font-black text-pm-secondary">
+                                                                                Cor
+                                                                                <select
+                                                                                    value={highlightColor}
+                                                                                    onChange={event => setHighlightColor(event.target.value as ReportHighlightColor)}
+                                                                                    className="block mt-1 w-full border border-pm-secondary/20 rounded-lg px-2 py-2 text-xs font-bold text-pm-dark bg-white"
+                                                                                >
+                                                                                    {REPORT_HIGHLIGHT_COLORS.map(color => (
+                                                                                        <option key={color.value} value={color.value}>{color.label}</option>
+                                                                                    ))}
+                                                                                </select>
+                                                                            </label>
+                                                                            <button
+                                                                                onClick={() => addTableHighlight(highlightedGroup.id)}
+                                                                                disabled={isSavingHighlight}
+                                                                                className="px-3 py-2 rounded-lg bg-pm-dark text-white text-xs font-black uppercase hover:bg-pm-primary disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+                                                                            >
+                                                                                {isSavingHighlight && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                                                                                Aplicar
+                                                                            </button>
+                                                                        </div>
+                                                                        <p className="mt-2 text-[11px] text-pm-secondary font-bold">
+                                                                            Numere somente as linhas de dados e as colunas visíveis da tabela, começando em 1.
+                                                                        </p>
+                                                                        {highlightedGroupRules.length > 0 && (
+                                                                            <div className="mt-3 flex flex-wrap gap-2">
+                                                                                {highlightedGroupRules.map(rule => {
+                                                                                    const color = REPORT_HIGHLIGHT_COLORS.find(item => item.value === rule.color);
+                                                                                    const location = rule.target === 'row'
+                                                                                        ? `linha ${(rule.rowIndex ?? 0) + 1}`
+                                                                                        : rule.target === 'column'
+                                                                                            ? `coluna ${(rule.columnIndex ?? 0) + 1}`
+                                                                                            : `linha ${(rule.rowIndex ?? 0) + 1}, coluna ${(rule.columnIndex ?? 0) + 1}`;
+
+                                                                                    return (
+                                                                                        <span key={rule.id} className="inline-flex items-center gap-1.5 rounded-lg border border-pm-secondary/15 bg-white px-2 py-1 text-[11px] font-bold text-pm-dark">
+                                                                                            <span className={`w-3 h-3 rounded-sm border border-pm-secondary/20 ${color?.swatch || 'bg-pm-light'}`} />
+                                                                                            {REPORT_HIGHLIGHT_TARGET_LABELS[rule.target]}: {location}
+                                                                                            <button
+                                                                                                onClick={() => removeTableHighlight(rule.id)}
+                                                                                                disabled={isSavingHighlight}
+                                                                                                className="ml-1 text-pm-secondary hover:text-red-700 disabled:opacity-40"
+                                                                                                aria-label="Remover destaque"
+                                                                                            >
+                                                                                                <X className="w-3.5 h-3.5" />
+                                                                                            </button>
+                                                                                        </span>
+                                                                                    );
+                                                                                })}
+                                                                            </div>
+                                                                        )}
+                                                                    </div>
+                                                                )}
                                                             </div>
                                                         </div>
                                                     );
@@ -555,6 +1126,42 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                         </div>
                     </main>
                 </div>
+                ) : (
+                    <div className="flex-1 min-h-0 overflow-hidden bg-[#dedbd1]">
+                        <div className="h-full overflow-auto custom-scrollbar p-4 md:p-6">
+                            {isPrintable ? (
+                                <div className={`mx-auto bg-white shadow-2xl ring-1 ring-black/10 origin-top report-preview-sheet ${reportFormat === 'presentation' ? 'w-[297mm] min-h-[210mm]' : 'w-[210mm] min-h-[297mm]'}`}>
+                                    {reportFormat === 'presentation' ? (
+                                        <ReportPresentationRenderer
+                                            selectedUnits={selectedUnits}
+                                            selectedGroups={selectedGroups}
+                                            reportCategoryConfig={sharedReportConfig}
+                                            fontSize={fontSize}
+                                        />
+                                    ) : (
+                                        <ReportPdfRenderer
+                                            selectedUnits={selectedUnits}
+                                            selectedGroups={selectedGroups}
+                                            reportCategoryConfig={sharedReportConfig}
+                                            reportSectionsConfig={technicalSections}
+                                            fontSize={fontSize}
+                                        />
+                                    )}
+                                </div>
+                            ) : (
+                                <div className="h-full min-h-[360px] flex items-center justify-center text-center p-8">
+                                    <div className="bg-white border border-pm-secondary/15 rounded-2xl p-8 max-w-md shadow-sm">
+                                        <FileText className="w-10 h-10 text-pm-secondary/45 mx-auto mb-3" />
+                                        <p className="text-lg font-black text-pm-dark">Sem conteúdo para prévia</p>
+                                        <p className="text-sm text-pm-secondary mt-1">
+                                            Selecione ao menos um tópico e uma seção para visualizar o relatório em A4.
+                                        </p>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
 
                 <div className="bg-white px-5 py-3.5 border-t border-pm-secondary/15 flex flex-col md:flex-row md:items-center justify-between gap-4 shrink-0">
                     <div className="flex items-center gap-3">
@@ -563,11 +1170,16 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                         </span>
                         <div>
                             <p className="text-sm font-black text-pm-dark">
-                                {isPrintable ? 'Relatório pronto para impressão' : 'Selecione ao menos um tópico e uma seção'}
+                                {isPrintable ? 'Briefing geral pronto para impressão' : 'Selecione ao menos um tópico e uma seção'}
                             </p>
                             <p className="text-xs text-pm-secondary">
                                 {selectedUnits.length} tópicos, {selectedGroups.length} seções e {selectedCategoryCount} categorias com conteúdo.
                             </p>
+                            {modelMessage && (
+                                <p className={`text-xs font-bold mt-1 ${modelMessage.type === 'success' ? 'text-emerald-700' : 'text-red-700'}`}>
+                                    {modelMessage.text}
+                                </p>
+                            )}
                         </div>
                     </div>
                     <div className="flex gap-3">
@@ -575,12 +1187,36 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                             Cancelar
                         </button>
                         <button
+                            onClick={reloadSavedModel}
+                            disabled={isSavingModel || isLoadingSavedModel || isSavingHighlight}
+                            className="px-4 py-2.5 text-sm font-black bg-white text-pm-dark rounded-lg hover:bg-pm-light transition-all border border-pm-secondary/20 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {isLoadingSavedModel ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
+                            Carregar modelo
+                        </button>
+                        <button
+                            onClick={saveReportConfiguration}
+                            disabled={isSavingModel || isLoadingSavedModel || isSavingHighlight}
+                            className="px-5 py-2.5 text-sm font-black bg-white text-pm-dark rounded-lg hover:bg-pm-light transition-all border border-pm-secondary/20 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {isSavingModel ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                            {isSavingModel ? 'Salvando...' : 'Salvar modelo'}
+                        </button>
+                        <button
+                            onClick={() => setReportMode(reportMode === 'preview' ? 'builder' : 'preview')}
+                            disabled={!isPrintable}
+                            className="px-5 py-2.5 text-sm font-black bg-white text-pm-dark rounded-lg hover:bg-pm-light transition-all border border-pm-secondary/20 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {reportMode === 'preview' ? <SlidersHorizontal className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                            {reportMode === 'preview' ? 'Editar montagem' : 'Ver prévia'}
+                        </button>
+                        <button
                             onClick={() => handlePrint()}
                             disabled={!isPrintable}
                             className="px-6 py-2.5 text-sm font-black bg-pm-primary text-pm-light rounded-lg hover:bg-pm-primary/90 transition-all shadow-md flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             <Printer className="w-4 h-4" />
-                            Imprimir PDF
+                            {reportFormat === 'presentation' ? 'Imprimir apresentação' : 'Imprimir PDF'}
                         </button>
                     </div>
                 </div>
@@ -588,15 +1224,22 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
 
             <div style={{ display: 'none' }}>
                 <div ref={printRef}>
-                    <ReportPdfRenderer
-                        selectedUnits={selectedUnits}
-                        selectedGroups={selectedGroups}
-                        reportCategoryConfig={{
-                            groupAssignments,
-                            categoryOrder: reportCategories,
-                            groupOrder
-                        }}
-                    />
+                    {reportFormat === 'presentation' ? (
+                        <ReportPresentationRenderer
+                            selectedUnits={selectedUnits}
+                            selectedGroups={selectedGroups}
+                            reportCategoryConfig={sharedReportConfig}
+                            fontSize={fontSize}
+                        />
+                    ) : (
+                        <ReportPdfRenderer
+                            selectedUnits={selectedUnits}
+                            selectedGroups={selectedGroups}
+                            reportCategoryConfig={sharedReportConfig}
+                            reportSectionsConfig={technicalSections}
+                            fontSize={fontSize}
+                        />
+                    )}
                 </div>
             </div>
         </div>

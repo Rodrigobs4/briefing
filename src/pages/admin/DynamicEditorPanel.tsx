@@ -3,6 +3,12 @@ import { useAuth, type DataGroup, calculateFieldValue } from '../../store/AuthCo
 import { Save, UploadCloud, CheckCircle2, FileText, AlertCircle, X, Hash, Percent, Loader2, ChevronDown } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { STORAGE_BUCKET_UPLOADS } from '../../config/storage';
+import { sortByTextPtBr } from '../../utils/textOrdering';
+import { formatBrazilianNumber, formatBrazilianNumericInput, formatStoredNumericValue, parseBrazilianNumber } from '../../utils/brazilianNumbers';
+
+const FIRST_REPORT_YEAR = 2023;
+const CURRENT_REPORT_YEAR = Math.max(FIRST_REPORT_YEAR, new Date().getFullYear());
+const REPORT_YEARS = Array.from({ length: CURRENT_REPORT_YEAR - FIRST_REPORT_YEAR + 1 }, (_, index) => CURRENT_REPORT_YEAR - index);
 
 export default function DynamicEditorPanel() {
     const { user, units, dataGroups, fields, deleteCollectionItem, getValuesForItem } = useAuth();
@@ -10,17 +16,18 @@ export default function DynamicEditorPanel() {
     // Suporte a múltiplos tópicos
     // Fallback: Se unitIds estiver vazio, tenta usar o unitId singular legado para compatibilidade
     const userUnitIds = (user?.unitIds && user.unitIds.length > 0) ? user.unitIds : (user?.unitId ? [user.unitId] : []);
-    const userUnits = units.filter(u => userUnitIds.includes(u.id));
+    const userUnits = sortByTextPtBr(units.filter(u => userUnitIds.includes(u.id)), unit => unit.name);
 
     // Estado para o tópico selecionado
     const [selectedUnitId, setSelectedUnitId] = useState<string | null>(userUnits[0]?.id || null);
     const userUnit = useMemo(() => units.find(u => u.id === selectedUnitId), [units, selectedUnitId]);
 
-    const myGroups = dataGroups.filter(g => g.unitId === selectedUnitId).sort((a, b) => a.order - b.order);
+    const myGroups = sortByTextPtBr(dataGroups.filter(g => g.unitId === selectedUnitId), group => group.title);
 
     const [activeGroup, setActiveGroup] = useState<DataGroup | null>(myGroups[0] || null);
     const [formData, setFormData] = useState<Record<string, any>>({});
     const [imagePreviews, setImagePreviews] = useState<Record<string, string[]>>({});
+    const [referenceYear, setReferenceYear] = useState(CURRENT_REPORT_YEAR);
 
     const [errorMess, setErrorMess] = useState('');
 
@@ -46,14 +53,31 @@ export default function DynamicEditorPanel() {
         const loadSnapshotData = async () => {
             try {
                 // 1. Buscar Entry (Snapshot) diretamente do banco
-                const { data: entry, error: entryError } = await supabase
+                let entryQuery = supabase
                     .from('data_group_entries')
                     .select('id, updated_at')
                     .eq('unit_id', userUnit.id)
-                    .eq('data_group_id', activeGroup.id)
-                    .maybeSingle();
+                    .eq('data_group_id', activeGroup.id);
+                entryQuery = activeGroup.updateFrequency === 'yearly'
+                    ? entryQuery.eq('reference_year', referenceYear)
+                    : entryQuery.is('reference_year', null);
+                let { data: entry, error: entryError } = await entryQuery.maybeSingle();
 
                 if (entryError) throw entryError;
+
+                // Se uma seção existente foi convertida para anual, preserva o cadastro
+                // anterior como dado do ano atual até que ele seja salvo com referência.
+                if (!entry && activeGroup.updateFrequency === 'yearly' && referenceYear === CURRENT_REPORT_YEAR) {
+                    const { data: legacyEntry, error: legacyError } = await supabase
+                        .from('data_group_entries')
+                        .select('id, updated_at')
+                        .eq('unit_id', userUnit.id)
+                        .eq('data_group_id', activeGroup.id)
+                        .is('reference_year', null)
+                        .maybeSingle();
+                    if (legacyError) throw legacyError;
+                    entry = legacyEntry;
+                }
 
                 if (entry) {
                     // 2. Buscar Valores
@@ -82,7 +106,9 @@ export default function DynamicEditorPanel() {
                                 previews[fv.field_id] = signedUrls;
                             } catch (e) { }
                         } else {
-                            prefillData[fv.field_id] = fv.value;
+                            prefillData[fv.field_id] = ['number', 'currency', 'percentage'].includes(fieldDef?.type || '')
+                                ? formatStoredNumericValue(fv.value, fieldDef?.type === 'currency')
+                                : fv.value;
                         }
                     }
                     setFormData(prefillData);
@@ -140,7 +166,7 @@ export default function DynamicEditorPanel() {
             loadCollectionItems();
         }
 
-    }, [activeGroup, userUnit, fields]);
+    }, [activeGroup, userUnit, fields, referenceYear]);
 
     const openCollectionItemEdit = async (itemId: string) => {
         setErrorMess('');
@@ -173,7 +199,11 @@ export default function DynamicEditorPanel() {
                 } catch (e) { }
             } else {
                 let val = fv.value_text;
-                if (fieldDef?.type === 'number' || fieldDef?.type === 'percentage' || fieldDef?.type === 'calculated') val = String(fv.value_number || '');
+                if (fieldDef && ['number', 'currency', 'percentage', 'calculated'].includes(fieldDef.type)) {
+                    val = fv.value_number === null || fv.value_number === undefined
+                        ? ''
+                        : formatBrazilianNumber(Number(fv.value_number), fieldDef.type === 'currency');
+                }
                 prefillData[fv.field_id] = val;
             }
         }
@@ -195,11 +225,7 @@ export default function DynamicEditorPanel() {
     };
 
     const parseNumericInput = (val: any): number => {
-        if (typeof val === 'number') return val;
-        if (val === null || val === undefined) return NaN;
-        let cleaned = String(val).trim().replace(/%/g, '').replace(/\s/g, '').replace(/,/g, '.');
-        if (!/^-?\d*\.?\d*$/.test(cleaned) || cleaned === '.' || cleaned === '-.') return NaN;
-        return Number(cleaned);
+        return parseBrazilianNumber(val);
     };
 
     // Auto-calculate fields effect
@@ -210,9 +236,9 @@ export default function DynamicEditorPanel() {
 
         calculatedFields.forEach(field => {
             const calculatedValue = calculateFieldValue(field, formData, activeFields);
-            // Se o valor calculado for diferente do atual no formData, atualiza
-            if (calculatedValue !== null && formData[field.id] !== calculatedValue) {
-                setFormData(prev => ({ ...prev, [field.id]: calculatedValue }));
+            const formattedValue = calculatedValue === null ? '' : formatBrazilianNumber(calculatedValue);
+            if (calculatedValue !== null && formData[field.id] !== formattedValue) {
+                setFormData(prev => ({ ...prev, [field.id]: formattedValue }));
             }
         });
     }, [formData, activeFields, activeGroup]);
@@ -230,6 +256,10 @@ export default function DynamicEditorPanel() {
     const handleInputChange = (fieldId: string, value: any) => {
         setFormData(prev => ({ ...prev, [fieldId]: value }));
         setErrorMess('');
+    };
+
+    const handleNumericInputChange = (fieldId: string, value: string, currency = false) => {
+        handleInputChange(fieldId, formatBrazilianNumericInput(value, currency));
     };
 
     const handleImageUpload = (e: ChangeEvent<HTMLInputElement>, fieldId: string) => {
@@ -306,12 +336,16 @@ export default function DynamicEditorPanel() {
                 setErrorMess(`Por favor, envie ao menos uma foto em: ${field.name}`);
                 return;
             }
-            if (!isEmpty && (field.type === 'number' || field.type === 'percentage')) {
+            if (!isEmpty && ['number', 'currency', 'percentage'].includes(field.type)) {
                 const parsed = parseNumericInput(val);
                 if (Number.isNaN(parsed)) {
                     setErrorMess(`O campo "${field.name}" contém um valor numérico inválido.`);
                     return;
                 }
+            }
+            if (!isEmpty && field.type === 'enum' && !(field.enumOptions ?? []).includes(String(val))) {
+                setErrorMess(`Selecione uma opção válida para o campo "${field.name}".`);
+                return;
             }
         }
 
@@ -326,7 +360,7 @@ export default function DynamicEditorPanel() {
                 let finalValue = formData[fieldId];
 
                 // Numerics
-                if (field && (field.type === 'number' || field.type === 'percentage' || field.type === 'calculated')) {
+                if (field && ['number', 'currency', 'percentage', 'calculated'].includes(field.type)) {
                     if (finalValue !== undefined && finalValue !== null && finalValue !== '') {
                         finalValue = parseNumericInput(finalValue);
                     }
@@ -365,25 +399,51 @@ export default function DynamicEditorPanel() {
             if (activeGroup.mode === 'snapshot') {
                 // 1. Garantir Entry Pai
                 let entryId = null;
+                const entryReferenceYear = activeGroup.updateFrequency === 'yearly' ? referenceYear : null;
 
-                const { data: existingEntry } = await supabase
+                let existingEntryQuery = supabase
                     .from('data_group_entries')
                     .select('id')
                     .eq('unit_id', userUnit.id)
-                    .eq('data_group_id', activeGroup.id)
-                    .maybeSingle();
+                    .eq('data_group_id', activeGroup.id);
+                existingEntryQuery = entryReferenceYear === null
+                    ? existingEntryQuery.is('reference_year', null)
+                    : existingEntryQuery.eq('reference_year', entryReferenceYear);
+                let { data: existingEntry, error: existingEntryError } = await existingEntryQuery.maybeSingle();
+                if (existingEntryError) throw existingEntryError;
+
+                let isLegacyAnnualEntry = false;
+                if (!existingEntry && activeGroup.updateFrequency === 'yearly' && entryReferenceYear === CURRENT_REPORT_YEAR) {
+                    const { data: legacyEntry, error: legacyError } = await supabase
+                        .from('data_group_entries')
+                        .select('id')
+                        .eq('unit_id', userUnit.id)
+                        .eq('data_group_id', activeGroup.id)
+                        .is('reference_year', null)
+                        .maybeSingle();
+                    if (legacyError) throw legacyError;
+                    existingEntry = legacyEntry;
+                    isLegacyAnnualEntry = !!legacyEntry;
+                }
 
                 if (existingEntry) {
                     entryId = existingEntry.id;
-                    await supabase.from('data_group_entries')
-                        .update({ updated_at: new Date().toISOString(), updated_by: user.id })
+                    const entryUpdates: Record<string, any> = {
+                        updated_at: new Date().toISOString(),
+                        updated_by: user.id
+                    };
+                    if (isLegacyAnnualEntry) entryUpdates.reference_year = entryReferenceYear;
+                    const { error: updateError } = await supabase.from('data_group_entries')
+                        .update(entryUpdates)
                         .eq('id', entryId);
+                    if (updateError) throw updateError;
                 } else {
                     const { data: newEntry, error: createError } = await supabase
                         .from('data_group_entries')
                         .insert({
                             unit_id: userUnit.id,
                             data_group_id: activeGroup.id,
+                            reference_year: entryReferenceYear,
                             updated_by: user.id
                         })
                         .select('id')
@@ -452,7 +512,7 @@ export default function DynamicEditorPanel() {
                     const existingVal = existingColValues?.find(ev => ev.field_id === fieldId);
 
                     const payload: any = { item_id: itemId, field_id: fieldId };
-                    if (fieldDef?.type === 'number' || fieldDef?.type === 'percentage' || fieldDef?.type === 'calculated') payload.value_number = val === '' ? null : Number(val);
+                    if (fieldDef && ['number', 'currency', 'percentage', 'calculated'].includes(fieldDef.type)) payload.value_number = val === '' ? null : Number(val);
                     else if (fieldDef?.type === 'image') payload.value_json = val; // Array
                     else payload.value_text = String(val);
 
@@ -556,7 +616,9 @@ export default function DynamicEditorPanel() {
                             <div>
                                 <div className="flex items-center gap-2">
                                     <h2 className="text-xl font-bold text-pm-dark">{activeGroup.title}</h2>
-                                    <span className="text-[10px] font-bold text-pm-secondary uppercase border border-pm-secondary/30 px-1.5 py-0.5 rounded-full">{activeGroup.mode === 'collection' ? 'Coleção' : 'Fixo'}</span>
+                                    <span className="text-[10px] font-bold text-pm-secondary uppercase border border-pm-secondary/30 px-1.5 py-0.5 rounded-full">
+                                        {activeGroup.mode === 'collection' ? 'Coleção' : activeGroup.reportLayout === 'text' ? 'Observações' : activeGroup.updateFrequency === 'yearly' ? 'Anual' : 'Fixo'}
+                                    </span>
                                 </div>
                                 <p className="text-sm text-pm-secondary">Preenchimento Oficial • {userUnit?.name || 'Selecione uma Unidade'}</p>
                             </div>
@@ -649,6 +711,20 @@ export default function DynamicEditorPanel() {
                         ) : (
                             <form onSubmit={handleSubmit} className="p-6 space-y-6">
 
+                                {activeGroup.mode === 'snapshot' && activeGroup.updateFrequency === 'yearly' && (
+                                    <div className="rounded-xl border border-pm-primary/20 bg-pm-primary/5 p-4">
+                                        <label className="block text-[10px] font-black uppercase tracking-widest text-pm-secondary mb-2">Ano de referência</label>
+                                        <select
+                                            value={referenceYear}
+                                            onChange={e => setReferenceYear(Number(e.target.value))}
+                                            className="w-full border border-pm-secondary/30 rounded-lg px-4 py-3 text-sm font-bold bg-white focus:ring-2 focus:ring-pm-primary outline-none"
+                                        >
+                                            {REPORT_YEARS.map(year => <option key={year} value={year}>{year}</option>)}
+                                        </select>
+                                        <p className="text-xs text-pm-secondary mt-2">Cada ano armazena um lançamento próprio para gerar o comparativo no relatório.</p>
+                                    </div>
+                                )}
+
                                 {errorMess && (
                                     <div className="bg-red-50 text-red-600 p-4 rounded-lg flex items-center gap-3 border border-red-200">
                                         <AlertCircle className="w-5 h-5 flex-shrink-0" />
@@ -687,15 +763,48 @@ export default function DynamicEditorPanel() {
                                             />
                                         )}
 
+                                        {field.type === 'enum' && (
+                                            <div className="relative">
+                                                <select
+                                                    value={formData[field.id] || ''}
+                                                    onChange={e => handleInputChange(field.id, e.target.value)}
+                                                    className="w-full appearance-none border border-pm-secondary/30 rounded-lg pl-4 pr-10 py-3 text-sm bg-white focus:ring-2 focus:ring-pm-primary outline-none"
+                                                >
+                                                    <option value="">Selecione uma opção</option>
+                                                    {formData[field.id] && !(field.enumOptions ?? []).includes(String(formData[field.id])) && (
+                                                        <option value={formData[field.id]}>{formData[field.id]} (opção removida)</option>
+                                                    )}
+                                                    {(field.enumOptions ?? []).map(option => (
+                                                        <option key={option} value={option}>{option}</option>
+                                                    ))}
+                                                </select>
+                                                <ChevronDown className="w-4 h-4 absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-pm-secondary" />
+                                            </div>
+                                        )}
+
                                         {field.type === 'number' && (
                                             <div className="relative">
                                                 <Hash className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-pm-secondary" />
                                                 <input
                                                     type="text"
+                                                    inputMode="decimal"
                                                     value={formData[field.id] !== undefined ? formData[field.id] : ''}
-                                                    onChange={e => handleInputChange(field.id, e.target.value)}
+                                                    onChange={e => handleNumericInputChange(field.id, e.target.value)}
                                                     className="w-full border border-pm-secondary/30 rounded-lg pl-9 pr-4 py-3 text-sm focus:ring-2 focus:ring-pm-primary outline-none"
                                                     placeholder="0"
+                                                />
+                                            </div>
+                                        )}
+
+                                        {field.type === 'currency' && (
+                                            <div>
+                                                <input
+                                                    type="text"
+                                                    inputMode="decimal"
+                                                    value={formData[field.id] !== undefined ? formData[field.id] : ''}
+                                                    onChange={e => handleNumericInputChange(field.id, e.target.value, true)}
+                                                    className="w-full border border-pm-secondary/30 rounded-lg px-4 py-3 text-sm focus:ring-2 focus:ring-pm-primary outline-none"
+                                                    placeholder="R$ 0,00"
                                                 />
                                             </div>
                                         )}
@@ -705,8 +814,9 @@ export default function DynamicEditorPanel() {
                                                 <Percent className="w-4 h-4 absolute right-4 top-1/2 -translate-y-1/2 text-pm-secondary" />
                                                 <input
                                                     type="text"
+                                                    inputMode="decimal"
                                                     value={formData[field.id] !== undefined ? formData[field.id] : ''}
-                                                    onChange={e => handleInputChange(field.id, e.target.value)}
+                                                    onChange={e => handleNumericInputChange(field.id, e.target.value)}
                                                     className="w-full border border-pm-secondary/30 rounded-lg px-4 py-3 text-sm focus:ring-2 focus:ring-pm-primary outline-none"
                                                     placeholder="Ex: 15,5%"
                                                 />

@@ -1,18 +1,26 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { supabase } from '../lib/supabase';
+import { parseBrazilianNumber } from '../utils/brazilianNumbers';
 
 export type Role = 'admin' | 'editor' | 'commander';
 
-export type FieldType = 'text' | 'textarea' | 'number' | 'percentage' | 'image' | 'calculated';
+export type FieldType = 'text' | 'textarea' | 'enum' | 'number' | 'currency' | 'percentage' | 'image' | 'calculated';
 
 export type CalculationOperation = 'sum' | 'subtract';
+export type DataGroupUpdateFrequency = 'fixed' | 'yearly';
+export type DataGroupCollectionLayout = 'narrative' | 'table';
+export type DataGroupReportLayout = 'table' | 'text';
 
 export interface Unit {
     id: string;
     name: string;
-    full_name?: string | null;
     order_index?: number;
     description: string;
+    regionName?: string | null;
+    regionalAscom?: string | null;
+    responsibleSector?: string | null;
+    reportCategoryTitle?: string | null;
+    reportCategoryOrder?: number;
     createdAt: string;
 }
 
@@ -22,6 +30,10 @@ export interface DataGroup {
     title: string;
     order: number;
     mode: 'snapshot' | 'collection';
+    updateFrequency: DataGroupUpdateFrequency;
+    showTotal: boolean;
+    collectionLayout: DataGroupCollectionLayout;
+    reportLayout: DataGroupReportLayout;
     categoryTitle?: string | null;
     categoryOrder?: number;
 }
@@ -35,12 +47,14 @@ export interface Field {
     order: number;
     isActive: boolean;
     calculationConfig?: CalculationConfig | null;
+    enumOptions?: string[];
 }
 
 export interface DataGroupEntry {
     id: string;
     unitId: string;
     dataGroupId: string;
+    referenceYear?: number | null;
     updatedAt: string;
     updatedBy: string;
 }
@@ -65,6 +79,98 @@ export interface CollectionItem {
 }
 
 export interface CollectionFieldValue {
+    id: string;
+    itemId: string;
+    fieldId: string;
+    valueText: string | null;
+    valueNumber: number | null;
+    valueJson: any | null;
+    updatedAt: string;
+}
+
+export interface RegionalCommand {
+    id: string;
+    code: string;
+    name: string;
+    type: 'regional' | 'specialized';
+    orderIndex: number;
+    isActive: boolean;
+}
+
+export interface UnitRegionalCommand {
+    id: string;
+    unitId: string;
+    regionalCommandId: string;
+    startedAt: string;
+    endedAt?: string | null;
+    isActive: boolean;
+}
+
+export interface RegionalBriefingSection {
+    id: string;
+    code: string;
+    title: string;
+    categoryTitle: string;
+    categoryOrder: number;
+    orderIndex: number;
+    mode: 'snapshot' | 'collection';
+    sourceStrategy: string;
+    updateFrequency: 'fixed' | 'weekly' | 'monthly' | 'semester' | 'yearly' | 'custom';
+    isActive: boolean;
+}
+
+export interface RegionalBriefingField {
+    id: string;
+    sectionId: string;
+    code: string;
+    label: string;
+    fieldType: 'text' | 'textarea' | 'number' | 'percentage' | 'currency' | 'date' | 'calculated';
+    orderIndex: number;
+    isRequired: boolean;
+    supportsComparison: boolean;
+    aggregationMethod: string;
+    calculationConfig?: any;
+    isActive: boolean;
+}
+
+export interface RegionalBriefingEntry {
+    id: string;
+    regionalCommandId: string;
+    sectionId: string;
+    referenceLabel?: string | null;
+    referenceStartDate?: string | null;
+    referenceEndDate?: string | null;
+    referenceYear?: number | null;
+    updatedBy?: string | null;
+    updatedAt: string;
+}
+
+export interface RegionalBriefingValue {
+    id: string;
+    entryId: string;
+    fieldId: string;
+    valueText: string | null;
+    valueNumber: number | null;
+    valueJson: any | null;
+    updatedAt: string;
+}
+
+export interface RegionalBriefingCollectionItem {
+    id: string;
+    regionalCommandId: string;
+    sectionId: string;
+    referenceLabel?: string | null;
+    referenceStartDate?: string | null;
+    referenceEndDate?: string | null;
+    referenceYear?: number | null;
+    status: string;
+    createdBy?: string | null;
+    updatedBy?: string | null;
+    createdAt: string;
+    updatedAt: string;
+}
+
+export interface RegionalBriefingCollectionValue {
     id: string;
     itemId: string;
     fieldId: string;
@@ -116,8 +222,17 @@ interface DatabaseContextType {
     fieldValues: FieldValue[];
     collectionItems: CollectionItem[];
     collectionFieldValues: CollectionFieldValue[];
+    regionalCommands: RegionalCommand[];
+    unitRegionalCommands: UnitRegionalCommand[];
+    regionalBriefingSections: RegionalBriefingSection[];
+    regionalBriefingFields: RegionalBriefingField[];
+    regionalBriefingEntries: RegionalBriefingEntry[];
+    regionalBriefingValues: RegionalBriefingValue[];
+    regionalBriefingCollectionItems: RegionalBriefingCollectionItem[];
+    regionalBriefingCollectionValues: RegionalBriefingCollectionValue[];
     users: User[];
     notifications: Notification[];
+    refreshData: () => Promise<void>;
 
     addUnit: (unit: Unit) => Promise<void>;
     deleteUnit: (id: string) => Promise<void>;
@@ -129,8 +244,8 @@ interface DatabaseContextType {
     updateField: (id: string, updates: Partial<Field>) => Promise<void>;
     deleteField: (id: string, softDelete: boolean) => Promise<void>;
 
-    upsertDataGroupEntry: (unitId: string, dataGroupId: string, userId: string, values: Record<string, any>) => Promise<void>;
-    getEntryForGroup: (unitId: string, dataGroupId: string) => DataGroupEntry | undefined;
+    upsertDataGroupEntry: (unitId: string, dataGroupId: string, userId: string, values: Record<string, any>, referenceYear?: number | null) => Promise<void>;
+    getEntryForGroup: (unitId: string, dataGroupId: string, referenceYear?: number | null) => DataGroupEntry | undefined;
     getValuesForEntry: (entryId: string) => FieldValue[];
     getLatestFieldValue: (fieldId: string) => { value: any, updatedAt: string, updatedBy: string } | undefined;
 
@@ -158,6 +273,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [fieldValues, setFieldValues] = useState<FieldValue[]>([]);
     const [collectionItems, setCollectionItems] = useState<CollectionItem[]>([]);
     const [collectionFieldValues, setCollectionFieldValues] = useState<CollectionFieldValue[]>([]);
+    const [regionalCommands, setRegionalCommands] = useState<RegionalCommand[]>([]);
+    const [unitRegionalCommands, setUnitRegionalCommands] = useState<UnitRegionalCommand[]>([]);
+    const [regionalBriefingSections, setRegionalBriefingSections] = useState<RegionalBriefingSection[]>([]);
+    const [regionalBriefingFields, setRegionalBriefingFields] = useState<RegionalBriefingField[]>([]);
+    const [regionalBriefingEntries, setRegionalBriefingEntries] = useState<RegionalBriefingEntry[]>([]);
+    const [regionalBriefingValues, setRegionalBriefingValues] = useState<RegionalBriefingValue[]>([]);
+    const [regionalBriefingCollectionItems, setRegionalBriefingCollectionItems] = useState<RegionalBriefingCollectionItem[]>([]);
+    const [regionalBriefingCollectionValues, setRegionalBriefingCollectionValues] = useState<RegionalBriefingCollectionValue[]>([]);
     const [users, setUsers] = useState<User[]>([]);
     const [notifications, setNotifications] = useState<Notification[]>([]);
 
@@ -234,13 +357,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     const clearData = () => {
-        setUnits([]); setDataGroups([]); setFields([]); setEntries([]); setFieldValues([]); setCollectionItems([]); setCollectionFieldValues([]); setUsers([]); setNotifications([]);
+        setUnits([]); setDataGroups([]); setFields([]); setEntries([]); setFieldValues([]); setCollectionItems([]); setCollectionFieldValues([]); setRegionalCommands([]); setUnitRegionalCommands([]); setRegionalBriefingSections([]); setRegionalBriefingFields([]); setRegionalBriefingEntries([]); setRegionalBriefingValues([]); setRegionalBriefingCollectionItems([]); setRegionalBriefingCollectionValues([]); setUsers([]); setNotifications([]);
     };
 
     const fetchAllData = async () => {
         console.time('fetchAllData');
         try {
-            const [u, dg, f, e, fv, ci, cfv, p, n] = await Promise.all([
+            const [u, dg, f, e, fv, ci, cfv, rc, urc, rbs, rbf, rbe, rbv, rbci, rbcv, p, n] = await Promise.all([
                 supabase.from('units').select('*'),
                 supabase.from('data_groups').select('*').order('order_index', { ascending: true }),
                 supabase.from('fields').select('*').order('order_index', { ascending: true }),
@@ -248,17 +371,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 supabase.from('field_values').select('*'),
                 supabase.from('collection_items').select('*').order('created_at', { ascending: false }),
                 supabase.from('collection_field_values').select('*'),
+                supabase.from('regional_commands').select('*').order('order_index', { ascending: true }),
+                supabase.from('unit_regional_commands').select('*'),
+                supabase.from('regional_briefing_sections').select('*').order('category_order', { ascending: true }).order('order_index', { ascending: true }),
+                supabase.from('regional_briefing_fields').select('*').order('order_index', { ascending: true }),
+                supabase.from('regional_briefing_entries').select('*'),
+                supabase.from('regional_briefing_values').select('*'),
+                supabase.from('regional_briefing_collection_items').select('*').order('created_at', { ascending: false }),
+                supabase.from('regional_briefing_collection_values').select('*'),
                 supabase.from('profiles').select('*'),
                 supabase.from('notifications').select('*').order('created_at', { ascending: false })
             ]);
 
-            if (u.data) setUnits(u.data.map(d => ({ id: d.id, name: d.name, full_name: d.full_name ?? null, order_index: d.order_index ?? 999, description: d.description, createdAt: d.created_at })));
-            if (dg.data) setDataGroups(dg.data.map(d => ({ id: d.id, unitId: d.unit_id, title: d.title, order: d.order_index, mode: d.mode as any, categoryTitle: d.category_title ?? null, categoryOrder: d.category_order ?? 999 })));
-            if (f.data) setFields(f.data.map(d => ({ id: d.id, dataGroupId: d.data_group_id, name: d.name, type: d.type as FieldType, required: d.required, order: d.order_index, isActive: d.is_active, calculationConfig: d.calculation_config })));
-            if (e.data) setEntries(e.data.map(d => ({ id: d.id, unitId: d.unit_id, dataGroupId: d.data_group_id, updatedAt: d.updated_at, updatedBy: d.updated_by })));
+            if (u.data) setUnits(u.data.map(d => ({ id: d.id, name: (d.full_name?.trim() || d.name), order_index: d.order_index ?? 999, description: d.description, regionName: d.region_name ?? null, regionalAscom: d.regional_ascom ?? null, responsibleSector: d.responsible_sector ?? null, reportCategoryTitle: d.report_category_title ?? null, reportCategoryOrder: d.report_category_order ?? 999, createdAt: d.created_at })));
+            if (dg.data) setDataGroups(dg.data.map(d => ({ id: d.id, unitId: d.unit_id, title: d.title, order: d.order_index, mode: d.mode as any, updateFrequency: d.update_frequency ?? 'fixed', showTotal: d.show_total ?? true, collectionLayout: d.collection_layout ?? 'narrative', reportLayout: d.report_layout ?? 'table', categoryTitle: d.category_title ?? null, categoryOrder: d.category_order ?? 999 })));
+            if (f.data) setFields(f.data.map(d => ({ id: d.id, dataGroupId: d.data_group_id, name: d.name, type: d.type as FieldType, required: d.required, order: d.order_index, isActive: d.is_active, calculationConfig: d.calculation_config, enumOptions: Array.isArray(d.enum_options) ? d.enum_options.filter((option: unknown): option is string => typeof option === 'string' && option.trim().length > 0) : [] })));
+            if (e.data) setEntries(e.data.map(d => ({ id: d.id, unitId: d.unit_id, dataGroupId: d.data_group_id, referenceYear: d.reference_year ?? null, updatedAt: d.updated_at, updatedBy: d.updated_by })));
             if (fv.data) setFieldValues(fv.data.map(d => ({ id: d.id, entryId: d.entry_id, fieldId: d.field_id, value: d.value })));
             if (ci.data) setCollectionItems(ci.data.map(d => ({ id: d.id, unitId: d.unit_id, dataGroupId: d.data_group_id, createdBy: d.created_by, updatedBy: d.updated_by, isFeatured: d.is_featured, status: d.status, createdAt: d.created_at, updatedAt: d.updated_at })));
             if (cfv.data) setCollectionFieldValues(cfv.data.map(d => ({ id: d.id, itemId: d.item_id, fieldId: d.field_id, valueText: d.value_text, valueNumber: d.value_number, valueJson: d.value_json, updatedAt: d.updated_at })));
+            if (rc.data) setRegionalCommands(rc.data.map(d => ({ id: d.id, code: d.code, name: d.name, type: d.type, orderIndex: d.order_index ?? 999, isActive: d.is_active })));
+            if (urc.data) setUnitRegionalCommands(urc.data.map(d => ({ id: d.id, unitId: d.unit_id, regionalCommandId: d.regional_command_id, startedAt: d.started_at, endedAt: d.ended_at ?? null, isActive: d.is_active })));
+            if (rbs.data) setRegionalBriefingSections(rbs.data.map(d => ({ id: d.id, code: d.code, title: d.title, categoryTitle: d.category_title, categoryOrder: d.category_order ?? 999, orderIndex: d.order_index ?? 999, mode: d.mode, sourceStrategy: d.source_strategy, updateFrequency: d.update_frequency ?? 'custom', isActive: d.is_active })));
+            if (rbf.data) setRegionalBriefingFields(rbf.data.map(d => ({ id: d.id, sectionId: d.section_id, code: d.code, label: d.label, fieldType: d.field_type, orderIndex: d.order_index ?? 999, isRequired: d.is_required, supportsComparison: d.supports_comparison, aggregationMethod: d.aggregation_method, calculationConfig: d.calculation_config, isActive: d.is_active })));
+            if (rbe.data) setRegionalBriefingEntries(rbe.data.map(d => ({ id: d.id, regionalCommandId: d.regional_command_id, sectionId: d.section_id, referenceLabel: d.reference_label ?? null, referenceStartDate: d.reference_start_date ?? null, referenceEndDate: d.reference_end_date ?? null, referenceYear: d.reference_year ?? null, updatedBy: d.updated_by ?? null, updatedAt: d.updated_at })));
+            if (rbv.data) setRegionalBriefingValues(rbv.data.map(d => ({ id: d.id, entryId: d.entry_id, fieldId: d.field_id, valueText: d.value_text, valueNumber: d.value_number, valueJson: d.value_json, updatedAt: d.updated_at })));
+            if (rbci.data) setRegionalBriefingCollectionItems(rbci.data.map(d => ({ id: d.id, regionalCommandId: d.regional_command_id, sectionId: d.section_id, referenceLabel: d.reference_label ?? null, referenceStartDate: d.reference_start_date ?? null, referenceEndDate: d.reference_end_date ?? null, referenceYear: d.reference_year ?? null, status: d.status, createdBy: d.created_by ?? null, updatedBy: d.updated_by ?? null, createdAt: d.created_at, updatedAt: d.updated_at })));
+            if (rbcv.data) setRegionalBriefingCollectionValues(rbcv.data.map(d => ({ id: d.id, itemId: d.item_id, fieldId: d.field_id, valueText: d.value_text, valueNumber: d.value_number, valueJson: d.value_json, updatedAt: d.updated_at })));
             if (p.data) setUsers(p.data.map(d => ({ id: d.id, name: d.name, email: 'Protegido por Regras Internas', role: d.role as Role, unitId: d.unit_id, isActive: d.is_active })));
             if (n.data) setNotifications(n.data.map(d => ({
                 id: d.id,
@@ -302,22 +441,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return data;
     };
     const addUnit = async (u: Omit<Unit, 'createdAt'>) => {
-        const { error } = await supabase.from('units').insert({
+        const payload: any = {
             id: u.id,
             name: u.name,
-            full_name: u.full_name,
             order_index: u.order_index ?? 999,
             description: u.description
-        });
+        };
+        if (u.regionName) payload.region_name = u.regionName;
+        if (u.regionalAscom) payload.regional_ascom = u.regionalAscom;
+        if (u.responsibleSector) payload.responsible_sector = u.responsibleSector;
+        if (u.reportCategoryTitle) payload.report_category_title = u.reportCategoryTitle;
+        if (u.reportCategoryOrder !== undefined) payload.report_category_order = u.reportCategoryOrder;
+
+        const { error } = await supabase.from('units').insert(payload);
         if (!error) fetchAllData();
     };
 
     const updateUnit = async (id: string, updates: Partial<Omit<Unit, 'id' | 'createdAt'>>) => {
         const payload: any = {};
         if (updates.name !== undefined) payload.name = updates.name;
-        if (updates.full_name !== undefined) payload.full_name = updates.full_name;
         if (updates.order_index !== undefined) payload.order_index = updates.order_index;
         if (updates.description !== undefined) payload.description = updates.description;
+        if (updates.regionName !== undefined) payload.region_name = updates.regionName;
+        if (updates.regionalAscom !== undefined) payload.regional_ascom = updates.regionalAscom;
+        if (updates.responsibleSector !== undefined) payload.responsible_sector = updates.responsibleSector;
+        if (updates.reportCategoryTitle !== undefined) payload.report_category_title = updates.reportCategoryTitle;
+        if (updates.reportCategoryOrder !== undefined) payload.report_category_order = updates.reportCategoryOrder;
 
         const { error, data } = await supabase.from('units').update(payload).eq('id', id).select();
         if (error) {
@@ -340,8 +489,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     const addDataGroup = async (group: DataGroup) => {
-        const { error } = await supabase.from('data_groups').insert({ id: group.id, unit_id: group.unitId, title: group.title, order_index: group.order, mode: group.mode, category_title: group.categoryTitle ?? null, category_order: group.categoryOrder ?? 999 });
-        if (error) console.error("Erro ao adicionar DataGroup:", error);
+        const { error } = await supabase.from('data_groups').insert({ id: group.id, unit_id: group.unitId, title: group.title, order_index: group.order, mode: group.mode, update_frequency: group.updateFrequency, show_total: group.showTotal, collection_layout: group.collectionLayout, report_layout: group.reportLayout, category_title: group.categoryTitle ?? null, category_order: group.categoryOrder ?? 999 });
+        if (error) {
+            console.error("Erro ao adicionar DataGroup:", error);
+            throw error;
+        }
         await fetchAllData();
     };
 
@@ -351,7 +503,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (updates.order !== undefined) payload.order_index = updates.order;
         if (updates.categoryTitle !== undefined) payload.category_title = updates.categoryTitle;
         if (updates.categoryOrder !== undefined) payload.category_order = updates.categoryOrder;
-        await supabase.from('data_groups').update(payload).eq('id', id);
+        if (updates.updateFrequency !== undefined) payload.update_frequency = updates.updateFrequency;
+        if (updates.showTotal !== undefined) payload.show_total = updates.showTotal;
+        if (updates.collectionLayout !== undefined) payload.collection_layout = updates.collectionLayout;
+        if (updates.reportLayout !== undefined) payload.report_layout = updates.reportLayout;
+        const { error } = await supabase.from('data_groups').update(payload).eq('id', id);
+        if (error) {
+            console.error("Erro ao atualizar DataGroup:", error);
+            throw error;
+        }
         await fetchAllData();
     };
 
@@ -361,7 +521,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     const addField = async (field: Field) => {
-        const { error } = await supabase.from('fields').insert({ id: field.id, data_group_id: field.dataGroupId, name: field.name, type: field.type, required: field.required, order_index: field.order, is_active: field.isActive });
+        const { error } = await supabase.from('fields').insert({ id: field.id, data_group_id: field.dataGroupId, name: field.name, type: field.type, required: field.required, order_index: field.order, is_active: field.isActive, calculation_config: field.calculationConfig ?? null, enum_options: field.enumOptions ?? [] });
         if (error) console.error("Erro ao adicionar Field:", error);
         await fetchAllData();
     };
@@ -374,6 +534,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (updates.order !== undefined) payload.order_index = updates.order;
         if (updates.isActive !== undefined) payload.is_active = updates.isActive;
         if (updates.calculationConfig !== undefined) payload.calculation_config = updates.calculationConfig;
+        if (updates.enumOptions !== undefined) payload.enum_options = updates.enumOptions;
         await supabase.from('fields').update(payload).eq('id', id);
         await fetchAllData();
     };
@@ -387,13 +548,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await fetchAllData();
     };
 
-    const upsertDataGroupEntry = async (unitId: string, dataGroupId: string, userId: string, values: Record<string, any>) => {
-        const { data: entry, error: entryErr } = await supabase.from('data_group_entries').upsert({
+    const upsertDataGroupEntry = async (unitId: string, dataGroupId: string, userId: string, values: Record<string, any>, referenceYear: number | null = null) => {
+        let entryQuery = supabase
+            .from('data_group_entries')
+            .select('id')
+            .eq('unit_id', unitId)
+            .eq('data_group_id', dataGroupId);
+        entryQuery = referenceYear === null
+            ? entryQuery.is('reference_year', null)
+            : entryQuery.eq('reference_year', referenceYear);
+        const { data: existingEntry, error: lookupError } = await entryQuery.maybeSingle();
+        if (lookupError) throw lookupError;
+
+        const payload = {
             unit_id: unitId,
             data_group_id: dataGroupId,
+            reference_year: referenceYear,
             updated_by: userId,
             updated_at: new Date().toISOString()
-        }, { onConflict: 'unit_id, data_group_id' }).select().single();
+        };
+        const { data: entry, error: entryErr } = existingEntry
+            ? await supabase.from('data_group_entries').update(payload).eq('id', existingEntry.id).select().single()
+            : await supabase.from('data_group_entries').insert(payload).select().single();
 
         if (entry && !entryErr) {
             const fvPayload = Object.entries(values).map(([fieldId, val]) => ({
@@ -425,8 +601,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 return {
                     item_id: item.id,
                     field_id: fieldId,
-                    value_text: field?.type === 'text' || field?.type === 'textarea' ? String(val) : null,
-                    value_number: field?.type === 'number' || field?.type === 'percentage' ? Number(val) : null,
+                    value_text: field && ['text', 'textarea', 'enum'].includes(field.type) ? String(val) : null,
+                    value_number: field && ['number', 'currency', 'percentage'].includes(field.type) ? parseBrazilianNumber(val) : null,
                     value_json: field?.type === 'image' ? val : null
                 };
             });
@@ -454,8 +630,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 return {
                     item_id: itemId,
                     field_id: fieldId,
-                    value_text: field?.type === 'text' || field?.type === 'textarea' ? String(val) : null,
-                    value_number: field?.type === 'number' || field?.type === 'percentage' ? Number(val) : null,
+                    value_text: field && ['text', 'textarea', 'enum'].includes(field.type) ? String(val) : null,
+                    value_number: field && ['number', 'currency', 'percentage'].includes(field.type) ? parseBrazilianNumber(val) : null,
                     value_json: field?.type === 'image' ? val : null
                 };
             });
@@ -471,8 +647,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await fetchAllData();
     };
 
-    const getEntryForGroup = (unitId: string, dataGroupId: string) => {
-        return entries.find(e => e.unitId === unitId && e.dataGroupId === dataGroupId);
+    const getEntryForGroup = (unitId: string, dataGroupId: string, referenceYear: number | null = null) => {
+        return entries.find(e => e.unitId === unitId && e.dataGroupId === dataGroupId && (e.referenceYear ?? null) === referenceYear);
     };
 
     const getValuesForEntry = (entryId: string) => {
@@ -551,7 +727,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         <AuthContext.Provider value={{
             user, login, logout, isAuthenticated: !!user, sessionLoading,
             updateUserEmail, updateUserPassword,
-            units, dataGroups, fields, entries, fieldValues, collectionItems, collectionFieldValues, users, notifications,
+            units, dataGroups, fields, entries, fieldValues, collectionItems, collectionFieldValues, regionalCommands, unitRegionalCommands, regionalBriefingSections, regionalBriefingFields, regionalBriefingEntries, regionalBriefingValues, regionalBriefingCollectionItems, regionalBriefingCollectionValues, users, notifications,
+            refreshData: fetchAllData,
             addUnit, updateUnit, deleteUnit, addDataGroup, updateDataGroup, deleteDataGroup,
             addField, updateField, deleteField,
             upsertDataGroupEntry, getEntryForGroup, getValuesForEntry, getLatestFieldValue,
@@ -574,7 +751,8 @@ export function useAuth() {
 export function calculateFieldValue(
     field: Field,
     formData: Record<string, any>,
-    allFields: Field[]
+    allFields: Field[],
+    storedValues = false
 ): number | null {
     if (field.type !== 'calculated' || !field.calculationConfig) {
         return null;
@@ -588,15 +766,18 @@ export function calculateFieldValue(
     const parseNumericInput = (val: any): number => {
         if (typeof val === 'number') return val;
         if (val === null || val === undefined || val === '') return 0; // Tratar vazio como 0 para o cálculo
-        let cleaned = String(val).trim().replace(/%/g, '').replace(/\s/g, '').replace(/,/g, '.');
-        if (!/^-?\d*\.?\d*$/.test(cleaned) || cleaned === '.' || cleaned === '-.') return 0;
-        return Number(cleaned);
+        if (storedValues) {
+            const storedValue = Number(val);
+            return Number.isNaN(storedValue) ? 0 : storedValue;
+        }
+        const parsed = parseBrazilianNumber(val);
+        return Number.isNaN(parsed) ? 0 : parsed;
     };
 
     const sourceValues = sourceFieldIds.map(id => {
         const sourceField = allFields.find(f => f.id === id);
         // Permite que campos calculados dependam de outros campos calculados, numéricos ou percentuais
-        if (!sourceField || !['number', 'percentage', 'calculated'].includes(sourceField.type)) {
+        if (!sourceField || !['number', 'currency', 'percentage', 'calculated'].includes(sourceField.type)) {
             return 0; // Ignora campos não-numéricos na soma/subtração
         }
         return parseNumericInput(formData[id]);

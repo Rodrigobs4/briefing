@@ -3,7 +3,7 @@ import { Outlet, Navigate, useLocation, Link } from 'react-router-dom';
 import { getPublicUploadUrl } from '../utils/storageUrls';
 import { useAuth } from '../store/AuthContext';
 import { useSettings } from '../store/SettingsContext';
-import { Shield, LogOut, Menu, BarChart3, Users, FileText, Settings, User, Loader2, HelpCircle } from 'lucide-react';
+import { Shield, LogOut, Menu, BarChart3, Users, Settings, User, Loader2, HelpCircle, ClipboardList } from 'lucide-react';
 import GuidedTour from '../components/GuidedTour';
 
 export default function MainLayout() {
@@ -32,11 +32,14 @@ export default function MainLayout() {
     }
 
     const navItems = [
-        { path: '/dashboard', label: 'Painel Estratégico', icon: BarChart3, show: true },
-        { path: '/admin', label: 'Entrada de Dados', icon: FileText, show: user?.role === 'admin' || user?.role === 'editor' },
-        { path: '/admin/users', label: 'Usuários', icon: Users, show: user?.role === 'admin' },
-        { path: '/admin/settings', label: 'Configurações', icon: Settings, show: user?.role === 'admin' }
+        { path: '/dashboard', label: 'Painel Estratégico', group: 'Painel', icon: BarChart3, show: true },
+        { path: '/admin', label: 'Dados do Briefing Geral', group: 'Operação', icon: ClipboardList, show: user?.role === 'admin' || user?.role === 'editor' },
+        { path: '/admin/users', label: 'Usuários', group: 'Administração', icon: Users, show: user?.role === 'admin' },
+        { path: '/admin/settings', label: 'Configurações', group: 'Administração', icon: Settings, show: user?.role === 'admin' }
     ].filter(item => item.show);
+    const activeNavItem = [...navItems]
+        .sort((a, b) => b.path.length - a.path.length)
+        .find(item => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`));
 
     return (
         <div className="flex bg-pm-light min-h-screen font-sans overflow-hidden">
@@ -69,27 +72,32 @@ export default function MainLayout() {
                 </div>
 
                 <nav className="flex-1 px-6 py-6 space-y-1.5 relative overflow-y-auto w-full custom-scrollbar">
-                    <p className="text-[10px] font-black text-pm-secondary/50 uppercase tracking-[0.2em] mb-4 ml-4">Menu Principal</p>
-                    {navItems.map((item) => {
+                    {Array.from(new Set(navItems.map(item => item.group))).map(group => (
+                        <div key={group} className="space-y-1.5">
+                            <p className="text-[10px] font-black text-pm-secondary/50 uppercase tracking-[0.2em] mb-3 mt-5 first:mt-0 ml-4">{group}</p>
+                            {navItems.filter(item => item.group === group).map((item) => {
                         const idMap: Record<string, string> = {
                             '/dashboard': 'nav-dashboard',
                             '/admin': 'nav-admin',
                             '/admin/users': 'nav-users',
                             '/admin/settings': 'nav-settings'
                         };
+                        const isActive = location.pathname === item.path || location.pathname.startsWith(`${item.path}/`);
                         return (
                             <Link key={item.path} to={item.path}
                                 id={idMap[item.path]}
                                 onClick={() => setIsMobileMenuOpen(false)}
-                                className={`flex items-center gap-3.5 px-4 py-3.5 rounded-2xl transition-all font-bold text-sm group
-                ${location.pathname === item.path
+                                className={`flex items-center gap-3.5 px-4 py-3.5 text-sm rounded-2xl transition-all font-bold group
+                ${isActive
                                         ? 'bg-pm-primary text-pm-dark shadow-lg shadow-pm-primary/10 border border-pm-primary/20'
                                         : 'text-pm-secondary hover:bg-white/5 hover:text-white border border-transparent'}`}>
-                                <item.icon className={`w-5 h-5 flex-shrink-0 transition-transform group-hover:scale-110 ${location.pathname === item.path ? 'text-pm-dark' : 'text-pm-secondary/60 group-hover:text-pm-primary'}`} />
+                                <item.icon className={`w-5 h-5 flex-shrink-0 transition-transform group-hover:scale-110 ${isActive ? 'text-pm-dark' : 'text-pm-secondary/60 group-hover:text-pm-primary'}`} />
                                 <span>{item.label}</span>
                             </Link>
                         );
-                    })}
+                            })}
+                        </div>
+                    ))}
                 </nav>
 
                 <div className="p-6 border-t border-white/5 bg-pm-dark-muted/30">
@@ -115,7 +123,7 @@ export default function MainLayout() {
                         </button>
                         <div className="flex flex-col">
                             <h1 className="text-xl sm:text-2xl font-black text-pm-dark tracking-tight truncate max-w-[200px] sm:max-w-[400px] lg:max-w-none">
-                                {navItems.find(item => item.path === location.pathname)?.label || 'Painel'}
+                                {activeNavItem?.label || 'Painel'}
                             </h1>
                             <p className="text-[10px] font-bold text-pm-secondary/60 uppercase tracking-widest hidden sm:block">
                                 Gestão Estratégica & Governança
