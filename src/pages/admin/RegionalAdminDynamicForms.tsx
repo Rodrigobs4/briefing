@@ -21,7 +21,7 @@ const FIELD_TYPES: { type: RegionalFieldType; label: string; icon: typeof Type }
     { type: 'text', label: 'Texto', icon: Type }
 ];
 
-const FREQUENCIES: RegionalFrequency[] = ['yearly', 'fixed', 'custom', 'weekly', 'semester'];
+const FREQUENCIES: RegionalFrequency[] = ['yearly', 'fixed', 'custom', 'monthly', 'weekly', 'semester'];
 
 const getFrequencyLabel = (frequency: RegionalFrequency) => ({
     fixed: 'Fixo',

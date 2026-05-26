@@ -40,7 +40,7 @@ type RegionalBriefingPdfProps = {
 };
 
 type RegionalUpdateFrequency = 'fixed' | 'weekly' | 'monthly' | 'semester' | 'yearly' | 'custom';
-const ALPHABETICAL_UPDATE_FREQUENCIES: RegionalUpdateFrequency[] = ['yearly', 'fixed', 'custom', 'weekly', 'semester'];
+const ALPHABETICAL_UPDATE_FREQUENCIES: RegionalUpdateFrequency[] = ['yearly', 'fixed', 'custom', 'monthly', 'weekly', 'semester'];
 
 const formatValue = (field: any, value: any) => {
     if (value === null || value === undefined || value === '') return '-';
@@ -121,6 +121,11 @@ const inferFrequencyFromRange = (startDate?: string | null, endDate?: string | n
     if (!startDate || !endDate) return 'custom';
     if (startDate === '1900-01-01' && endDate === '1900-01-01') return 'fixed';
     if (daysBetweenInclusive(startDate, endDate) === 7) return 'weekly';
+    if (startDate.slice(0, 7) === endDate.slice(0, 7) && startDate.endsWith('-01')) {
+        const [year, month] = startDate.split('-').map(Number);
+        const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+        if (endDate.endsWith(`-${String(lastDay).padStart(2, '0')}`)) return 'monthly';
+    }
     if (
         (startDate.endsWith('-01-01') && endDate.endsWith('-06-30')) ||
         (startDate.endsWith('-07-01') && endDate.endsWith('-12-31'))
@@ -160,6 +165,7 @@ const getFrequencyDescription = (frequency: RegionalUpdateFrequency) => {
 const getReferenceRangeByFrequency = (
     frequency: RegionalUpdateFrequency,
     year: number,
+    month: number,
     semester: '1' | '2',
     weekStartDate: string,
     customStartDate: string,
@@ -172,6 +178,15 @@ const getReferenceRangeByFrequency = (
     if (frequency === 'weekly') {
         const endDate = addDaysIsoDate(weekStartDate, 6);
         return { startDate: weekStartDate, endDate, label: `Semana de ${formatDatePtBr(weekStartDate)} a ${formatDatePtBr(endDate)}` };
+    }
+
+    if (frequency === 'monthly') {
+        const monthLabel = String(month).padStart(2, '0');
+        const lastDay = String(new Date(Date.UTC(year, month, 0)).getUTCDate()).padStart(2, '0');
+        const startDate = `${year}-${monthLabel}-01`;
+        const endDate = `${year}-${monthLabel}-${lastDay}`;
+        const label = new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+        return { startDate, endDate, label: label.charAt(0).toUpperCase() + label.slice(1) };
     }
 
     if (frequency === 'semester') {
@@ -864,6 +879,7 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
     const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
     const [activeUpdateFrequency, setActiveUpdateFrequency] = useState<RegionalUpdateFrequency>('weekly');
     const [periodYear, setPeriodYear] = useState(currentYear());
+    const [periodMonth, setPeriodMonth] = useState(new Date().getMonth() + 1);
     const [periodSemester, setPeriodSemester] = useState<'1' | '2'>('1');
     const [weekStartDate, setWeekStartDate] = useState(todayIsoDate());
     const [customStartDate, setCustomStartDate] = useState(currentYearStartIsoDate());
@@ -931,7 +947,7 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
         .filter(section => section.isActive)
         .sort((a, b) => a.categoryOrder - b.categoryOrder || a.orderIndex - b.orderIndex);
     const selectedCommand = activeRegionalCommands.find(command => command.name === selectedRegion) ?? null;
-    const referenceRange = getReferenceRangeByFrequency(activeUpdateFrequency, periodYear, periodSemester, weekStartDate, customStartDate, customEndDate);
+    const referenceRange = getReferenceRangeByFrequency(activeUpdateFrequency, periodYear, periodMonth, periodSemester, weekStartDate, customStartDate, customEndDate);
     const referenceStartDate = referenceRange.startDate;
     const referenceEndDate = referenceRange.endDate;
     const referenceLabel = referenceRange.label;
@@ -1061,6 +1077,9 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
 
         if (item.frequency === 'weekly') {
             setWeekStartDate(item.startDate);
+        } else if (item.frequency === 'monthly') {
+            setPeriodYear(Number(item.startDate.slice(0, 4)));
+            setPeriodMonth(Number(item.startDate.slice(5, 7)));
         } else if (item.frequency === 'semester') {
             setPeriodYear(Number(item.startDate.slice(0, 4)));
             setPeriodSemester(item.startDate.endsWith('-01-01') ? '1' : '2');
@@ -1587,7 +1606,23 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
                                     </select>
                                 </div>
                             )}
-                            {['semester', 'yearly'].includes(activeUpdateFrequency) && (
+                            {activeUpdateFrequency === 'monthly' && (
+                                <div>
+                                    <label className="text-[10px] font-black uppercase tracking-widest text-pm-secondary">Mês</label>
+                                    <select
+                                        value={periodMonth}
+                                        onChange={event => setPeriodMonth(Number(event.target.value))}
+                                        className="mt-1 w-full border border-pm-secondary/20 rounded-xl px-3 py-2.5 text-sm font-bold text-pm-dark bg-white outline-none focus:ring-2 focus:ring-pm-primary/20 capitalize"
+                                    >
+                                        {Array.from({ length: 12 }, (_, index) => (
+                                            <option key={index + 1} value={index + 1}>
+                                                {new Date(2026, index).toLocaleDateString('pt-BR', { month: 'long' })}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+                            )}
+                            {['monthly', 'semester', 'yearly'].includes(activeUpdateFrequency) && (
                                 <div>
                                     <label className="text-[10px] font-black uppercase tracking-widest text-pm-secondary">Ano</label>
                                     <input
@@ -1640,7 +1675,7 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
                                     {referenceLabel}
                                 </span>
                             </div>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-2">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-6 gap-2">
                                 {ALPHABETICAL_UPDATE_FREQUENCIES.map(frequency => {
                                     const isActive = activeUpdateFrequency === frequency;
                                     const totalSections = catalogSections.filter(section => (section.updateFrequency ?? 'custom') === frequency).length;

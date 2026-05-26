@@ -46,6 +46,7 @@ type SavedReportConfiguration = {
     categoryOrder: string[];
     unitOrder: string[];
     groupOrder: string[];
+    fieldOrder: Record<string, string[]>;
     groupAssignments: Record<string, string>;
     fontSize: 'standard' | 'large';
     technicalSections: {
@@ -77,7 +78,7 @@ const isReportHighlightColor = (value: unknown): value is ReportHighlightColor =
 const GLOBAL_REPORT_CONFIGURATION_ID = 'general';
 
 export default function ReportBuilderModal({ onClose }: { onClose: () => void }) {
-    const { units: allUnits, regionalCommands, dataGroups, user } = useAuth();
+    const { units: allUnits, regionalCommands, dataGroups, fields, user } = useAuth();
     const reportUnits = sortByTextPtBr(allUnits.filter(unit => isGeneralBriefingUnit(unit, regionalCommands)), unit => unit.name);
     const editorUnitIds = user?.unitIds && user.unitIds.length > 0
         ? user.unitIds
@@ -97,6 +98,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
     const [categoryOrder, setCategoryOrder] = useState<string[]>([]);
     const [unitOrder, setUnitOrder] = useState<string[]>([]);
     const [groupOrder, setGroupOrder] = useState<string[]>([]);
+    const [fieldOrder, setFieldOrder] = useState<Record<string, string[]>>({});
     const [groupAssignments, setGroupAssignments] = useState<Record<string, string>>({});
     const [newCategoryName, setNewCategoryName] = useState('');
     const [searchTerm, setSearchTerm] = useState('');
@@ -173,6 +175,18 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                             .filter(([unitId, category]) => allowedUnitIds.has(unitId) && typeof category === 'string')
                     )
                     : {};
+                const restoredFieldOrder = configuration.fieldOrder && typeof configuration.fieldOrder === 'object'
+                    ? Object.fromEntries(
+                        Object.entries(configuration.fieldOrder)
+                            .filter(([groupId, order]) => allowedGroupIds.has(groupId) && Array.isArray(order))
+                            .map(([groupId, order]) => {
+                                const allowedFieldIds = new Set(fields
+                                    .filter(field => field.dataGroupId === groupId && field.isActive && field.type !== 'image')
+                                    .map(field => field.id));
+                                return [groupId, getStringArray(order).filter(id => allowedFieldIds.has(id))];
+                            })
+                    )
+                    : {};
 
                 setSelectedUnits(restoredUnits);
                 setSelectedGroups(restoredGroups);
@@ -180,6 +194,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                 setCategoryOrder(getStringArray(configuration.categoryOrder));
                 setUnitOrder(getStringArray(configuration.unitOrder).filter(id => restoredUnits.includes(id)));
                 setGroupOrder(getStringArray(configuration.groupOrder).filter(id => restoredGroups.includes(id)));
+                setFieldOrder(restoredFieldOrder);
                 setGroupAssignments(assignments);
                 setExpandedUnits(restoredUnits);
                 setFontSize(configuration.fontSize === 'large' ? 'large' : 'standard');
@@ -216,7 +231,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
         return () => {
             isActive = false;
         };
-    }, [user?.id, allUnits.length, dataGroups.length, modelReloadRequest, canManageGlobalModel]);
+    }, [user?.id, allUnits.length, dataGroups.length, fields, modelReloadRequest, canManageGlobalModel]);
 
     const reloadSavedModel = () => {
         loadedConfigurationUserId.current = null;
@@ -330,6 +345,28 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
         .filter(group => group.unitId === unitId)
         .sort((a, b) => getGroupOrderIndex(a.id) - getGroupOrderIndex(b.id) || a.order - b.order);
 
+    const getFieldsForGroup = (groupId: string) => {
+        const configuredOrder = fieldOrder[groupId] ?? [];
+        const getConfiguredIndex = (fieldId: string) => {
+            const index = configuredOrder.indexOf(fieldId);
+            return index >= 0 ? index : 9999;
+        };
+
+        return fields
+            .filter(field => field.dataGroupId === groupId && field.isActive && field.type !== 'image')
+            .sort((a, b) => getConfiguredIndex(a.id) - getConfiguredIndex(b.id) || a.order - b.order);
+    };
+
+    const moveField = (groupId: string, fieldId: string, direction: 'up' | 'down') => {
+        const orderedFieldIds = getFieldsForGroup(groupId).map(field => field.id);
+        const index = orderedFieldIds.indexOf(fieldId);
+        const targetIndex = direction === 'up' ? index - 1 : index + 1;
+        if (index < 0 || targetIndex < 0 || targetIndex >= orderedFieldIds.length) return;
+
+        [orderedFieldIds[index], orderedFieldIds[targetIndex]] = [orderedFieldIds[targetIndex], orderedFieldIds[index]];
+        setFieldOrder(previous => ({ ...previous, [groupId]: orderedFieldIds }));
+    };
+
     const selectedUnitObjects = units
         .filter(unit => selectedUnits.includes(unit.id) && getGroupsForUnit(unit.id).length > 0)
         .sort((a, b) => getUnitOrderIndex(a.id) - getUnitOrderIndex(b.id) || (a.order_index ?? 999) - (b.order_index ?? 999));
@@ -429,6 +466,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
         categoryOrder: reportCategories,
         unitOrder,
         groupOrder,
+        fieldOrder,
         tableHighlights: tableHighlights.filter(rule => selectedGroups.includes(rule.groupId))
     };
     const toggleTechnicalSection = (section: keyof typeof technicalSections) => {
@@ -524,6 +562,9 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
             categoryOrder: reportCategories,
             unitOrder: unitOrder.filter(id => selectedUnits.includes(id)),
             groupOrder: groupOrder.filter(id => selectedGroups.includes(id)),
+            fieldOrder: Object.fromEntries(
+                selectedGroups.map(groupId => [groupId, getFieldsForGroup(groupId).map(field => field.id)])
+            ),
             groupAssignments: Object.fromEntries(
                 Object.entries(groupAssignments).filter(([unitId]) => visibleUnitIds.includes(unitId))
             ),
@@ -902,20 +943,54 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                                                             </div>
                                                             <div className="border-t border-pm-secondary/10 bg-white/65 px-4 py-3">
                                                                 <p className="text-[10px] uppercase tracking-widest font-black text-pm-secondary mb-2">Seções incluídas neste tópico</p>
-                                                                <div className="flex flex-wrap gap-1.5">
-                                                                    {topicGroups.map(group => (
-                                                                        <div key={group.id} className="flex items-center overflow-hidden rounded-md bg-pm-light border border-pm-secondary/10">
-                                                                            <span className="px-2 py-1 text-[11px] font-bold text-pm-dark">{group.title}</span>
-                                                                            {canManageGlobalModel && group.reportLayout !== 'text' && (
-                                                                                <button
-                                                                                    onClick={() => setHighlightEditingGroupId(current => current === group.id ? '' : group.id)}
-                                                                                    className={`px-2 py-1 text-[10px] font-black uppercase border-l border-pm-secondary/10 transition-colors ${highlightEditingGroupId === group.id ? 'bg-pm-primary text-white' : 'text-pm-secondary hover:bg-white hover:text-pm-dark'}`}
-                                                                                >
-                                                                                    Cor
-                                                                                </button>
-                                                                            )}
-                                                                        </div>
-                                                                    ))}
+                                                                <div className="space-y-2">
+                                                                    {topicGroups.map(group => {
+                                                                        const orderedFields = getFieldsForGroup(group.id);
+                                                                        return (
+                                                                            <div key={group.id} className="overflow-hidden rounded-lg bg-pm-light border border-pm-secondary/10">
+                                                                                <div className="flex items-center">
+                                                                                    <span className="px-2.5 py-2 text-[11px] font-black text-pm-dark flex-1">{group.title}</span>
+                                                                                    {canManageGlobalModel && group.reportLayout !== 'text' && (
+                                                                                        <button
+                                                                                            onClick={() => setHighlightEditingGroupId(current => current === group.id ? '' : group.id)}
+                                                                                            className={`px-2.5 py-2 text-[10px] font-black uppercase border-l border-pm-secondary/10 transition-colors ${highlightEditingGroupId === group.id ? 'bg-pm-primary text-white' : 'text-pm-secondary hover:bg-white hover:text-pm-dark'}`}
+                                                                                        >
+                                                                                            Cor
+                                                                                        </button>
+                                                                                    )}
+                                                                                </div>
+                                                                                {canManageGlobalModel && orderedFields.length > 0 && (
+                                                                                    <div className="border-t border-pm-secondary/10 bg-white px-2.5 py-2">
+                                                                                        <p className="text-[9px] uppercase tracking-widest font-black text-pm-secondary mb-1.5">Ordem dos campos no relatório</p>
+                                                                                        <div className="space-y-1">
+                                                                                            {orderedFields.map((field, fieldIndex) => (
+                                                                                                <div key={field.id} className="flex items-center gap-2 rounded-md border border-pm-secondary/10 bg-[#fbfaf6] px-2 py-1">
+                                                                                                    <span className="w-5 text-[10px] font-black text-pm-secondary">{fieldIndex + 1}</span>
+                                                                                                    <span className="text-[11px] font-bold text-pm-dark flex-1 truncate">{field.name}</span>
+                                                                                                    <button
+                                                                                                        onClick={() => moveField(group.id, field.id, 'up')}
+                                                                                                        disabled={fieldIndex === 0}
+                                                                                                        className="p-1 text-pm-secondary hover:text-pm-primary disabled:opacity-20 disabled:cursor-not-allowed rounded hover:bg-pm-light"
+                                                                                                        title="Subir campo"
+                                                                                                    >
+                                                                                                        <ArrowUp className="w-3.5 h-3.5" />
+                                                                                                    </button>
+                                                                                                    <button
+                                                                                                        onClick={() => moveField(group.id, field.id, 'down')}
+                                                                                                        disabled={fieldIndex === orderedFields.length - 1}
+                                                                                                        className="p-1 text-pm-secondary hover:text-pm-primary disabled:opacity-20 disabled:cursor-not-allowed rounded hover:bg-pm-light"
+                                                                                                        title="Descer campo"
+                                                                                                    >
+                                                                                                        <ArrowDown className="w-3.5 h-3.5" />
+                                                                                                    </button>
+                                                                                                </div>
+                                                                                            ))}
+                                                                                        </div>
+                                                                                    </div>
+                                                                                )}
+                                                                            </div>
+                                                                        );
+                                                                    })}
                                                                 </div>
                                                                 {canManageGlobalModel && highlightedGroup && (
                                                                     <div className="mt-3 rounded-xl border border-pm-secondary/15 bg-[#fbfaf6] p-3">

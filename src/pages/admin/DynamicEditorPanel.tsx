@@ -9,7 +9,12 @@ import { formatBrazilianNumber, formatBrazilianNumericInput, formatStoredNumeric
 
 const FIRST_REPORT_YEAR = 2023;
 const CURRENT_REPORT_YEAR = Math.max(FIRST_REPORT_YEAR, new Date().getFullYear());
+const CURRENT_REPORT_MONTH = new Date().getMonth() + 1;
 const REPORT_YEARS = Array.from({ length: CURRENT_REPORT_YEAR - FIRST_REPORT_YEAR + 1 }, (_, index) => CURRENT_REPORT_YEAR - index);
+const REPORT_MONTHS = Array.from({ length: 12 }, (_, index) => ({
+    value: index + 1,
+    label: new Date(2026, index).toLocaleDateString('pt-BR', { month: 'long' })
+}));
 
 export default function DynamicEditorPanel() {
     const { user, units, regionalCommands, dataGroups, fields, deleteCollectionItem, getValuesForItem } = useAuth();
@@ -43,6 +48,7 @@ export default function DynamicEditorPanel() {
     const [formData, setFormData] = useState<Record<string, any>>({});
     const [imagePreviews, setImagePreviews] = useState<Record<string, string[]>>({});
     const [referenceYear, setReferenceYear] = useState(CURRENT_REPORT_YEAR);
+    const [referenceMonth, setReferenceMonth] = useState(CURRENT_REPORT_MONTH);
 
     const [errorMess, setErrorMess] = useState('');
 
@@ -89,9 +95,13 @@ export default function DynamicEditorPanel() {
                     .select('id, updated_at')
                     .eq('unit_id', userUnit.id)
                     .eq('data_group_id', activeGroup.id);
-                entryQuery = activeGroup.updateFrequency === 'yearly'
-                    ? entryQuery.eq('reference_year', referenceYear)
-                    : entryQuery.is('reference_year', null);
+                if (activeGroup.updateFrequency === 'yearly') {
+                    entryQuery = entryQuery.eq('reference_year', referenceYear).is('reference_month', null);
+                } else if (activeGroup.updateFrequency === 'monthly') {
+                    entryQuery = entryQuery.eq('reference_year', referenceYear).eq('reference_month', referenceMonth);
+                } else {
+                    entryQuery = entryQuery.is('reference_year', null).is('reference_month', null);
+                }
                 let { data: entry, error: entryError } = await entryQuery.maybeSingle();
 
                 if (entryError) throw entryError;
@@ -105,6 +115,7 @@ export default function DynamicEditorPanel() {
                         .eq('unit_id', userUnit.id)
                         .eq('data_group_id', activeGroup.id)
                         .is('reference_year', null)
+                        .is('reference_month', null)
                         .maybeSingle();
                     if (legacyError) throw legacyError;
                     entry = legacyEntry;
@@ -199,7 +210,7 @@ export default function DynamicEditorPanel() {
             loadCollectionItems();
         }
 
-    }, [activeGroup, userUnit, fields, referenceYear]);
+    }, [activeGroup, userUnit, fields, referenceYear, referenceMonth]);
 
     const openCollectionItemEdit = async (itemId: string) => {
         setErrorMess('');
@@ -457,16 +468,21 @@ export default function DynamicEditorPanel() {
             if (activeGroup.mode === 'snapshot') {
                 // 1. Garantir Entry Pai
                 let entryId = null;
-                const entryReferenceYear = activeGroup.updateFrequency === 'yearly' ? referenceYear : null;
+                const entryReferenceYear = activeGroup.updateFrequency !== 'fixed' ? referenceYear : null;
+                const entryReferenceMonth = activeGroup.updateFrequency === 'monthly' ? referenceMonth : null;
 
                 let existingEntryQuery = supabase
                     .from('data_group_entries')
                     .select('id')
                     .eq('unit_id', userUnit.id)
                     .eq('data_group_id', activeGroup.id);
-                existingEntryQuery = entryReferenceYear === null
-                    ? existingEntryQuery.is('reference_year', null)
-                    : existingEntryQuery.eq('reference_year', entryReferenceYear);
+                if (entryReferenceYear === null) {
+                    existingEntryQuery = existingEntryQuery.is('reference_year', null).is('reference_month', null);
+                } else if (entryReferenceMonth === null) {
+                    existingEntryQuery = existingEntryQuery.eq('reference_year', entryReferenceYear).is('reference_month', null);
+                } else {
+                    existingEntryQuery = existingEntryQuery.eq('reference_year', entryReferenceYear).eq('reference_month', entryReferenceMonth);
+                }
                 let { data: existingEntry, error: existingEntryError } = await existingEntryQuery.maybeSingle();
                 if (existingEntryError) throw existingEntryError;
 
@@ -478,6 +494,7 @@ export default function DynamicEditorPanel() {
                         .eq('unit_id', userUnit.id)
                         .eq('data_group_id', activeGroup.id)
                         .is('reference_year', null)
+                        .is('reference_month', null)
                         .maybeSingle();
                     if (legacyError) throw legacyError;
                     existingEntry = legacyEntry;
@@ -490,7 +507,10 @@ export default function DynamicEditorPanel() {
                         updated_at: new Date().toISOString(),
                         updated_by: user.id
                     };
-                    if (isLegacyAnnualEntry) entryUpdates.reference_year = entryReferenceYear;
+                    if (isLegacyAnnualEntry) {
+                        entryUpdates.reference_year = entryReferenceYear;
+                        entryUpdates.reference_month = null;
+                    }
                     const { error: updateError } = await supabase.from('data_group_entries')
                         .update(entryUpdates)
                         .eq('id', entryId);
@@ -502,6 +522,7 @@ export default function DynamicEditorPanel() {
                             unit_id: userUnit.id,
                             data_group_id: activeGroup.id,
                             reference_year: entryReferenceYear,
+                            reference_month: entryReferenceMonth,
                             updated_by: user.id
                         })
                         .select('id')
@@ -684,7 +705,7 @@ export default function DynamicEditorPanel() {
                                 <div className="flex items-center gap-2">
                                     <h2 className="text-xl font-bold text-pm-dark">{activeGroup.title}</h2>
                                     <span className="text-[10px] font-bold text-pm-secondary uppercase border border-pm-secondary/30 px-1.5 py-0.5 rounded-full">
-                                        {activeGroup.mode === 'collection' ? 'Coleção' : activeGroup.reportLayout === 'text' ? 'Observações' : activeGroup.updateFrequency === 'yearly' ? 'Anual' : 'Fixo'}
+                                        {activeGroup.mode === 'collection' ? 'Coleção' : activeGroup.reportLayout === 'text' ? 'Observações' : activeGroup.updateFrequency === 'yearly' ? 'Anual' : activeGroup.updateFrequency === 'monthly' ? 'Mensal' : 'Fixo'}
                                     </span>
                                 </div>
                                 <p className="text-sm text-pm-secondary">Preenchimento Oficial • {userUnit?.name || 'Selecione uma Unidade'}</p>
@@ -801,17 +822,35 @@ export default function DynamicEditorPanel() {
                         ) : (
                             <form onSubmit={handleSubmit} className="p-6 space-y-6">
 
-                                {activeGroup.mode === 'snapshot' && activeGroup.updateFrequency === 'yearly' && (
+                                {activeGroup.mode === 'snapshot' && activeGroup.updateFrequency !== 'fixed' && (
                                     <div className="rounded-xl border border-pm-primary/20 bg-pm-primary/5 p-4">
-                                        <label className="block text-[10px] font-black uppercase tracking-widest text-pm-secondary mb-2">Ano de referência</label>
-                                        <select
-                                            value={referenceYear}
-                                            onChange={e => setReferenceYear(Number(e.target.value))}
-                                            className="w-full border border-pm-secondary/30 rounded-lg px-4 py-3 text-sm font-bold bg-white focus:ring-2 focus:ring-pm-primary outline-none"
-                                        >
-                                            {REPORT_YEARS.map(year => <option key={year} value={year}>{year}</option>)}
-                                        </select>
-                                        <p className="text-xs text-pm-secondary mt-2">Cada ano armazena um lançamento próprio para gerar o comparativo no relatório.</p>
+                                        <div className={`grid gap-3 ${activeGroup.updateFrequency === 'monthly' ? 'sm:grid-cols-2' : 'grid-cols-1'}`}>
+                                            <div>
+                                                <label className="block text-[10px] font-black uppercase tracking-widest text-pm-secondary mb-2">Ano de referência</label>
+                                                <select
+                                                    value={referenceYear}
+                                                    onChange={e => setReferenceYear(Number(e.target.value))}
+                                                    className="w-full border border-pm-secondary/30 rounded-lg px-4 py-3 text-sm font-bold bg-white focus:ring-2 focus:ring-pm-primary outline-none"
+                                                >
+                                                    {REPORT_YEARS.map(year => <option key={year} value={year}>{year}</option>)}
+                                                </select>
+                                            </div>
+                                            {activeGroup.updateFrequency === 'monthly' && (
+                                                <div>
+                                                    <label className="block text-[10px] font-black uppercase tracking-widest text-pm-secondary mb-2">Mês de referência</label>
+                                                    <select
+                                                        value={referenceMonth}
+                                                        onChange={e => setReferenceMonth(Number(e.target.value))}
+                                                        className="w-full border border-pm-secondary/30 rounded-lg px-4 py-3 text-sm font-bold bg-white focus:ring-2 focus:ring-pm-primary outline-none capitalize"
+                                                    >
+                                                        {REPORT_MONTHS.map(month => <option key={month.value} value={month.value}>{month.label}</option>)}
+                                                    </select>
+                                                </div>
+                                            )}
+                                        </div>
+                                        <p className="text-xs text-pm-secondary mt-2">
+                                            Cada {activeGroup.updateFrequency === 'monthly' ? 'mês' : 'ano'} armazena um lançamento próprio para gerar o comparativo no relatório.
+                                        </p>
                                     </div>
                                 )}
 

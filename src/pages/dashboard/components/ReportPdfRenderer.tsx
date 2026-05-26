@@ -24,6 +24,7 @@ interface ReportPdfRendererProps {
         categoryOrder: string[];
         unitOrder?: string[];
         groupOrder?: string[];
+        fieldOrder?: Record<string, string[]>;
         tableHighlights?: ReportTableHighlightRule[];
     };
     reportSectionsConfig?: {
@@ -34,7 +35,7 @@ interface ReportPdfRendererProps {
 }
 
 type TableRow = ReactNode[] | { type: 'section'; label: string; groupId?: string };
-type RawMetricRow = TableRow | { type: 'yearly'; label: string; valuesByYear: Record<string, ReactNode>; showTotal: boolean; isCurrency: boolean };
+type RawMetricRow = TableRow | { type: 'yearly'; label: string; valuesByYear: Record<string, ReactNode>; showTotal: boolean; isCurrency: boolean; periodType?: 'yearly' | 'monthly' };
 type IconStatCardProps = {
     icon: ReactNode;
     label: string;
@@ -46,6 +47,10 @@ type IconStatCardProps = {
 const FIRST_REPORT_YEAR = 2023;
 const CURRENT_REPORT_YEAR = Math.max(FIRST_REPORT_YEAR, new Date().getFullYear());
 const REPORT_YEARS = Array.from({ length: CURRENT_REPORT_YEAR - FIRST_REPORT_YEAR + 1 }, (_, index) => String(FIRST_REPORT_YEAR + index));
+const formatMonthlyPeriod = (period: string) => {
+    const [year, month] = period.split('-').map(Number);
+    return new Date(year, month - 1).toLocaleDateString('pt-BR', { month: 'short', year: 'numeric' }).replace('.', '');
+};
 
 // ==================================================================================
 // COMPONENTES AUXILIARES PARA RELATÓRIO EXECUTIVO (COMPACTOS)
@@ -350,6 +355,17 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
         const configuredIndex = reportCategoryConfig?.groupOrder?.findIndex(item => item === groupId) ?? -1;
         return configuredIndex >= 0 ? configuredIndex + 1 : fallback;
     };
+    const getSortedFields = (groupId: string) => {
+        const configuredOrder = reportCategoryConfig?.fieldOrder?.[groupId] ?? [];
+        const getRuntimeFieldOrder = (fieldId: string, fallback: number) => {
+            const configuredIndex = configuredOrder.indexOf(fieldId);
+            return configuredIndex >= 0 ? configuredIndex : 9999 + fallback;
+        };
+
+        return fields
+            .filter(field => field.dataGroupId === groupId && field.isActive && field.type !== 'image')
+            .sort((a, b) => getRuntimeFieldOrder(a.id, a.order) - getRuntimeFieldOrder(b.id, b.order));
+    };
     const getSortedGroups = (groups: typeof dataGroups) => [...groups]
         .sort((a, b) => getRuntimeCategoryOrder(getRuntimeCategoryLabel(a), getRuntimeCategoryFallbackOrder(a)) - getRuntimeCategoryOrder(getRuntimeCategoryLabel(b), getRuntimeCategoryFallbackOrder(b)) || getRuntimeGroupOrder(a.id, a.order) - getRuntimeGroupOrder(b.id, b.order) || a.order - b.order);
     const selectedDataGroups = getSortedGroups(dataGroups.filter(group => selectedGroups.includes(group.id)));
@@ -563,12 +579,10 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                         return val;
                     };
                     const textSectionsForUnit = textGroupsForUnit.map(group => {
-                        const groupEntry = unitEntries.find(entry => entry.dataGroupId === group.id && !entry.referenceYear)
+                        const groupEntry = unitEntries.find(entry => entry.dataGroupId === group.id && !entry.referenceYear && !entry.referenceMonth)
                             ?? unitEntries.find(entry => entry.dataGroupId === group.id);
                         const snapshotValues = groupEntry ? getValuesForEntry(groupEntry.id) : [];
-                        const values = fields
-                            .filter(field => field.dataGroupId === group.id && field.isActive && field.type !== 'image')
-                            .sort((a, b) => a.order - b.order)
+                        const values = getSortedFields(group.id)
                             .map(field => getVal(field, snapshotValues))
                             .filter(value => value !== '-');
 
@@ -602,17 +616,17 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                             return acc;
                         }
 
-                        const groupFields = fields.filter(f => f.dataGroupId === group.id && f.isActive && f.type !== 'image').sort((a, b) => a.order - b.order);
+                        const groupFields = getSortedFields(group.id);
                         if (groupFields.length === 0) return acc;
 
                         if (group.updateFrequency === 'yearly') {
                             flushYearBlock();
                             const groupEntriesByYear = new Map(
                                 unitEntries
-                                    .filter(entry => entry.dataGroupId === group.id && entry.referenceYear)
+                                    .filter(entry => entry.dataGroupId === group.id && entry.referenceYear && !entry.referenceMonth)
                                     .map(entry => [String(entry.referenceYear), entry])
                             );
-                            const legacyEntry = unitEntries.find(entry => entry.dataGroupId === group.id && !entry.referenceYear);
+                            const legacyEntry = unitEntries.find(entry => entry.dataGroupId === group.id && !entry.referenceYear && !entry.referenceMonth);
                             const currentYear = String(CURRENT_REPORT_YEAR);
                             if (legacyEntry && !groupEntriesByYear.has(currentYear)) {
                                 groupEntriesByYear.set(currentYear, legacyEntry);
@@ -629,7 +643,38 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                         return [year, entry ? getVal(field, values) : '-'];
                                     })),
                                     showTotal: group.showTotal && ['number', 'currency', 'percentage', 'calculated'].includes(field.type),
-                                    isCurrency: field.type === 'currency'
+                                    isCurrency: field.type === 'currency',
+                                    periodType: 'yearly' as const
+                                }))
+                            );
+                            return acc;
+                        }
+
+                        if (group.updateFrequency === 'monthly') {
+                            flushYearBlock();
+                            const entriesByMonth = new Map(
+                                unitEntries
+                                    .filter(entry => entry.dataGroupId === group.id && entry.referenceYear && entry.referenceMonth)
+                                    .map(entry => [
+                                        `${entry.referenceYear}-${String(entry.referenceMonth).padStart(2, '0')}`,
+                                        entry
+                                    ])
+                            );
+                            const periods = Array.from(entriesByMonth.keys()).sort();
+
+                            acc.rows.push(
+                                { type: 'section', label: group.title, groupId: group.id },
+                                ...groupFields.map(field => ({
+                                    type: 'yearly' as const,
+                                    label: field.name,
+                                    valuesByYear: Object.fromEntries(periods.map(period => {
+                                        const entry = entriesByMonth.get(period);
+                                        const values = entry ? getValuesForEntry(entry.id) : [];
+                                        return [period, entry ? getVal(field, values) : '-'];
+                                    })),
+                                    showTotal: group.showTotal && ['number', 'currency', 'percentage', 'calculated'].includes(field.type),
+                                    isCurrency: field.type === 'currency',
+                                    periodType: 'monthly' as const
                                 }))
                             );
                             return acc;
@@ -759,44 +804,52 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
 
                         if (yearlyRows.length > 0) {
                             const blockYears = Array.from(new Set(yearlyRows.flatMap(row => Object.keys(row.valuesByYear)))).sort();
-                            const showYearColumns = blockYears.length > 1;
                             const showTotalColumn = yearlyRows.some(row => row.showTotal);
                             const hasCurrencyValues = yearlyRows.some(row => row.isCurrency);
-                            const headers = showYearColumns
-                                ? ['Indicador', ...blockYears.map(year => `Ano ${year}`), ...(showTotalColumn ? ['Total'] : [])]
-                                : ['Indicador', 'Total'];
-                            const rows = yearlyRows.map<TableRow>(row => {
-                                const total = row.showTotal ? getMetricTotal(row.valuesByYear, blockYears, row.isCurrency) : '-';
-                                if (!showYearColumns) {
-                                    return [row.label, <MetricValue key={`${row.label}-total`} value={total} label={row.label} />];
-                                }
+                            const isMonthlyComparison = yearlyRows.some(row => row.periodType === 'monthly');
+                            const periodChunks = isMonthlyComparison && blockYears.length > 4
+                                ? Array.from({ length: Math.ceil(blockYears.length / 4) }, (_, index) => blockYears.slice(index * 4, index * 4 + 4))
+                                : [blockYears];
 
-                                return [
-                                    row.label,
-                                    ...blockYears.map(year => <MetricValue key={`${row.label}-${year}`} value={row.valuesByYear[year] ?? '-'} label={row.label} />),
-                                    ...(showTotalColumn ? [<MetricValue key={`${row.label}-total`} value={total} label={row.label} />] : [])
-                                ];
-                            });
-
-                            metricTableBlocks.push({
-                                id: `${activeSection || 'comparativo'}-annual-${metricTableBlocks.length}`,
-                                groupId: activeSectionGroupId,
-                                headers,
-                                rows: [
-                                    ...(activeSection ? [{ type: 'section' as const, label: activeSection }] : []),
-                                    ...rows
-                                ],
-                                colWidths: headers.map((_, index) => {
-                                    if (hasCurrencyValues && showYearColumns) {
-                                        const valueColumnWidth = 84 / (headers.length - 1);
-                                        return index === 0 ? '16%' : `${valueColumnWidth.toFixed(2)}%`;
+                            periodChunks.forEach((periods, periodChunkIndex) => {
+                                const showYearColumns = periods.length > 1 || (isMonthlyComparison && periods.length > 0);
+                                const totalHeader = periodChunks.length > 1 ? 'Total geral' : 'Total';
+                                const headers = showYearColumns
+                                    ? ['Indicador', ...periods.map(period => isMonthlyComparison ? formatMonthlyPeriod(period) : `Ano ${period}`), ...(showTotalColumn ? [totalHeader] : [])]
+                                    : ['Indicador', 'Total'];
+                                const rows = yearlyRows.map<TableRow>(row => {
+                                    const total = row.showTotal ? getMetricTotal(row.valuesByYear, blockYears, row.isCurrency) : '-';
+                                    if (!showYearColumns) {
+                                        return [row.label, <MetricValue key={`${row.label}-total`} value={total} label={row.label} />];
                                     }
-                                    if (index === 0) return showYearColumns ? '30%' : '34%';
-                                    if (!showYearColumns) return '66%';
-                                    if (showTotalColumn && index === headers.length - 1) return '22%';
-                                    return `${Math.floor((showTotalColumn ? 48 : 70) / blockYears.length)}%`;
-                                }),
-                                financial: hasCurrencyValues
+
+                                    return [
+                                        row.label,
+                                        ...periods.map(period => <MetricValue key={`${row.label}-${period}`} value={row.valuesByYear[period] ?? '-'} label={row.label} />),
+                                        ...(showTotalColumn ? [<MetricValue key={`${row.label}-total`} value={total} label={row.label} />] : [])
+                                    ];
+                                });
+
+                                metricTableBlocks.push({
+                                    id: `${activeSection || 'comparativo'}-${isMonthlyComparison ? 'monthly' : 'annual'}-${periodChunkIndex}-${metricTableBlocks.length}`,
+                                    groupId: activeSectionGroupId,
+                                    headers,
+                                    rows: [
+                                        ...(activeSection ? [{ type: 'section' as const, label: activeSection }] : []),
+                                        ...rows
+                                    ],
+                                    colWidths: headers.map((_, index) => {
+                                        if (hasCurrencyValues && showYearColumns) {
+                                            const valueColumnWidth = 84 / (headers.length - 1);
+                                            return index === 0 ? '16%' : `${valueColumnWidth.toFixed(2)}%`;
+                                        }
+                                        if (index === 0) return showYearColumns ? '30%' : '34%';
+                                        if (!showYearColumns) return '66%';
+                                        if (showTotalColumn && index === headers.length - 1) return '22%';
+                                        return `${Math.floor((showTotalColumn ? 48 : 70) / Math.max(periods.length, 1))}%`;
+                                    }),
+                                    financial: hasCurrencyValues
+                                });
                             });
                         }
 
@@ -862,9 +915,7 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                         }
 
                                         const unitCollections = collectionItems.filter(i => i.unitId === unit.id && i.dataGroupId === group.id && i.status !== 'archived');
-                                        const collectionFields = fields
-                                            .filter(field => field.dataGroupId === group.id && field.isActive && field.type !== 'image')
-                                            .sort((a, b) => a.order - b.order);
+                                        const collectionFields = getSortedFields(group.id);
                                         const getCollectionFieldValue = (itemId: string, field: any) => {
                                             const value = getValuesForItem(itemId).find((itemValue: any) => itemValue.fieldId === field.id);
                                             return formatCollectionValue(field, value) || '-';
@@ -918,7 +969,12 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                                         const itemValues = getValuesForItem(item.id);
                                                         const valuesWithField = itemValues
                                                             .map((fv: any) => ({ value: fv, field: fields.find(f => f.id === fv.fieldId) }))
-                                                            .filter(({ field }) => field);
+                                                            .filter(({ field }) => field)
+                                                            .sort((left, right) => {
+                                                                const leftIndex = collectionFields.findIndex(field => field.id === left.field!.id);
+                                                                const rightIndex = collectionFields.findIndex(field => field.id === right.field!.id);
+                                                                return (leftIndex >= 0 ? leftIndex : 9999) - (rightIndex >= 0 ? rightIndex : 9999);
+                                                            });
                                                         const textValues = valuesWithField.filter(({ field }) => field?.type === 'text');
                                                         const datePeriodValues = textValues.filter(({ field }) => field ? isDateOrPeriodField(field.name) : false);
                                                         const titleValue = textValues.find(({ field, value }) => field && !isDateOrPeriodField(field.name) && value.valueText);
