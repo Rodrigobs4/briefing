@@ -11,6 +11,7 @@ import { supabase } from '../../lib/supabase';
 import { getPublicUploadUrl } from '../../utils/storageUrls';
 import { STORAGE_BUCKET_UPLOADS } from '../../config/storage';
 import { compareTextPtBr, sortByTextPtBr } from '../../utils/textOrdering';
+import { isGeneralBriefingUnit } from '../../utils/generalBriefingUnits';
 
 type Tab = 'general' | 'security' | 'notifications' | 'indicators';
 
@@ -468,8 +469,10 @@ function TabSecurity() {
 
 // ─── Notificações ─────────────────────────────────────────────────────────────
 function TabNotifications() {
-    const { notifications, addNotification, updateNotification, deleteNotification, units } = useAuth();
+    const { notifications, addNotification, updateNotification, deleteNotification, units, regionalCommands } = useAuth();
     const { settings, updateSettings } = useSettings();
+    const briefingUnits = units.filter(unit => isGeneralBriefingUnit(unit, regionalCommands));
+    const briefingUnitIds = new Set(briefingUnits.map(unit => unit.id));
     
     const [isCreating, setIsCreating] = useState(false);
     const [newTitle, setNewTitle] = useState('');
@@ -496,12 +499,15 @@ function TabNotifications() {
             
             // Garantir que temos deadlines para todas as unidades se estiver vazio
             if (settings.notification_deadlines && settings.notification_deadlines.length > 0) {
-                setDeadlines(sortByTextPtBr(settings.notification_deadlines, deadline => deadline.unit));
+                setDeadlines(sortByTextPtBr(
+                    settings.notification_deadlines.filter((deadline: { id: string }) => briefingUnitIds.has(deadline.id)),
+                    deadline => deadline.unit
+                ));
             } else {
-                setDeadlines(sortByTextPtBr(units, unit => unit.name).map(u => ({ id: u.id, unit: u.name, day: 'Sexta-feira', hour: '18:00' })));
+                setDeadlines(sortByTextPtBr(briefingUnits, unit => unit.name).map(u => ({ id: u.id, unit: u.name, day: 'Sexta-feira', hour: '18:00' })));
             }
         }
-    }, [settings, units]);
+    }, [settings, units, regionalCommands]);
 
     const handleCreate = async () => {
         if (!newTitle || !newContent) return;
@@ -798,7 +804,11 @@ function TabNotifications() {
 
 // ─── Setup de Indicadores ─────────────────────────────────────────────────────
 function TabIndicators() {
-    const { units, dataGroups, fields } = useAuth();
+    const { units, regionalCommands, dataGroups, fields } = useAuth();
+    const briefingUnits = units.filter(unit => isGeneralBriefingUnit(unit, regionalCommands));
+    const briefingUnitIds = new Set(briefingUnits.map(unit => unit.id));
+    const briefingGroups = dataGroups.filter(group => briefingUnitIds.has(group.unitId));
+    const briefingGroupIds = new Set(briefingGroups.map(group => group.id));
 
     const indicatorTypes = [
         { icon: Hash, label: 'Numérico', description: 'Contagem absoluta. Ex: 42 policiais', color: 'text-blue-600 bg-blue-50' },
@@ -808,7 +818,7 @@ function TabIndicators() {
         { icon: BarChart2, label: 'Tendência', description: 'Compara com o período anterior', color: 'text-amber-600 bg-amber-50' },
     ];
 
-    const totalFields = fields.filter(f => f.isActive);
+    const totalFields = fields.filter(f => f.isActive && briefingGroupIds.has(f.dataGroupId));
     const numericFields = totalFields.filter(f => f.type === 'number' || f.type === 'currency' || f.type === 'percentage' || f.type === 'calculated');
     const textFields = totalFields.filter(f => f.type === 'text' || f.type === 'textarea');
     const imageFields = totalFields.filter(f => f.type === 'image');
@@ -818,8 +828,8 @@ function TabIndicators() {
             {/* Visão Geral */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 {[
-                    { label: 'Unidades', value: units.length, color: 'bg-pm-primary/10 text-pm-primary' },
-                    { label: 'Conjuntos', value: dataGroups.length, color: 'bg-blue-50 text-blue-600' },
+                    { label: 'Tópicos', value: briefingUnits.length, color: 'bg-pm-primary/10 text-pm-primary' },
+                    { label: 'Conjuntos', value: briefingGroups.length, color: 'bg-blue-50 text-blue-600' },
                     { label: 'Campos Ativos', value: totalFields.length, color: 'bg-green-50 text-green-600' },
                     { label: 'Indicadores', value: numericFields.length, color: 'bg-amber-50 text-amber-600' },
                 ].map(stat => (
@@ -873,13 +883,13 @@ function TabIndicators() {
 
             {/* Mapeamento por Unidade */}
             <div className="bg-white p-6 rounded-xl shadow-sm border border-pm-secondary/20">
-                <h3 className="font-bold text-pm-dark border-b border-pm-secondary/10 pb-3 mb-4">Mapeamento de Campos por Unidade</h3>
-                {units.length === 0 ? (
-                    <p className="text-sm text-pm-secondary italic text-center py-6">Nenhuma unidade cadastrada.</p>
+                <h3 className="font-bold text-pm-dark border-b border-pm-secondary/10 pb-3 mb-4">Mapeamento de Campos por Tópico</h3>
+                {briefingUnits.length === 0 ? (
+                    <p className="text-sm text-pm-secondary italic text-center py-6">Nenhum tópico cadastrado.</p>
                 ) : (
                     <div className="space-y-2">
-                        {sortByTextPtBr(units, unit => unit.name).map(unit => {
-                            const unitGroups = dataGroups.filter(g => g.unitId === unit.id);
+                        {sortByTextPtBr(briefingUnits, unit => unit.name).map(unit => {
+                            const unitGroups = briefingGroups.filter(g => g.unitId === unit.id);
                             const unitGroupIds = unitGroups.map(g => g.id);
                             const unitFields = fields.filter(f => unitGroupIds.includes(f.dataGroupId) && f.isActive);
                             const unitNumeric = unitFields.filter(f => f.type === 'number' || f.type === 'currency' || f.type === 'percentage' || f.type === 'calculated').length;

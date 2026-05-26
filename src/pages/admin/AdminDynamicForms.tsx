@@ -10,6 +10,7 @@ import {
     Briefcase, CalendarCheck, NotebookPen, Bell, ClipboardPlus, Package, AlignLeft, Archive, ArrowLeft
 } from 'lucide-react';
 import { compareTextPtBr } from '../../utils/textOrdering';
+import { isGeneralBriefingUnit } from '../../utils/generalBriefingUnits';
 
 const TOPIC_ICONS = [
     { name: 'database', label: 'database', icon: Database },
@@ -187,9 +188,10 @@ function IconPickerModal({ value, onConfirm, onClose }: IconPickerModalProps) {
 }
 
 export default function AdminDynamicForms() {
-    const { units, dataGroups, fields, addUnit, updateUnit, deleteUnit, addDataGroup, updateDataGroup, deleteDataGroup, addField, updateField, deleteField, fieldValues } = useAuth();
+    const { units, regionalCommands, dataGroups, fields, users, addUnit, updateUnit, deleteUnit, addDataGroup, updateDataGroup, deleteDataGroup, addField, updateField, deleteField, fieldValues } = useAuth();
+    const briefingUnits = units.filter(unit => isGeneralBriefingUnit(unit, regionalCommands));
 
-    const [selectedUnit, setSelectedUnit] = useState<string | null>(units[0]?.id || null);
+    const [selectedUnit, setSelectedUnit] = useState<string | null>(briefingUnits[0]?.id || null);
     const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
 
     const [newUnitName, setNewUnitName] = useState('');
@@ -197,6 +199,7 @@ export default function AdminDynamicForms() {
     const [newUnitRegion, setNewUnitRegion] = useState('');
     const [newUnitAscom, setNewUnitAscom] = useState('');
     const [newUnitResponsibleSector, setNewUnitResponsibleSector] = useState('');
+    const [newUnitResponsibleUpdaterId, setNewUnitResponsibleUpdaterId] = useState('');
     const [newUnitCategory, setNewUnitCategory] = useState('');
 
     // Group CRUDS
@@ -237,6 +240,7 @@ export default function AdminDynamicForms() {
     const [editUnitRegion, setEditUnitRegion] = useState('');
     const [editUnitAscom, setEditUnitAscom] = useState('');
     const [editUnitResponsibleSector, setEditUnitResponsibleSector] = useState('');
+    const [editUnitResponsibleUpdaterId, setEditUnitResponsibleUpdaterId] = useState('');
     const [editUnitCategory, setEditUnitCategory] = useState('');
     const [deletingUnit, setDeletingUnit] = useState<any>(null); // For confirmation modal
 
@@ -246,11 +250,14 @@ export default function AdminDynamicForms() {
 
     const unitGroups = dataGroups.filter(g => g.unitId === selectedUnit);
     const categoryOptions = Array.from(new Set([
-        ...units.map(unit => unit.reportCategoryTitle?.trim()),
+        ...briefingUnits.map(unit => unit.reportCategoryTitle?.trim()),
         ...dataGroups.map(group => group.categoryTitle?.trim())
     ].filter(Boolean) as string[])).sort(compareTextPtBr);
+    const updaterOptions = users
+        .filter(candidate => candidate.role === 'editor' && candidate.isActive !== false)
+        .sort((left, right) => compareTextPtBr(left.name, right.name));
     const getCategoryOrder = (categoryTitle: string) => {
-        const matching = units.filter(unit => (unit.reportCategoryTitle || '').trim() === categoryTitle);
+        const matching = briefingUnits.filter(unit => (unit.reportCategoryTitle || '').trim() === categoryTitle);
         return matching.length > 0 ? Math.min(...matching.map(unit => unit.reportCategoryOrder ?? 999)) : categoryOptions.length + 1;
     };
     const groupedUnitGroups = unitGroups.length > 0
@@ -271,6 +278,7 @@ export default function AdminDynamicForms() {
             regionName: newUnitRegion.trim() || null,
             regionalAscom: newUnitAscom.trim() || null,
             responsibleSector: newUnitResponsibleSector.trim() || null,
+            responsibleUpdaterId: newUnitResponsibleUpdaterId || null,
             reportCategoryTitle: newUnitCategory.trim() || null,
             reportCategoryOrder: newUnitCategory.trim() ? getCategoryOrder(newUnitCategory.trim()) : 999
         });
@@ -279,6 +287,7 @@ export default function AdminDynamicForms() {
         setNewUnitRegion('');
         setNewUnitAscom('');
         setNewUnitResponsibleSector('');
+        setNewUnitResponsibleUpdaterId('');
         setNewUnitCategory('');
         setSelectedUnit(newId);
         setSelectedGroup(null);
@@ -293,6 +302,7 @@ export default function AdminDynamicForms() {
             regionName: editUnitRegion.trim() || null,
             regionalAscom: editUnitAscom.trim() || null,
             responsibleSector: editUnitResponsibleSector.trim() || null,
+            responsibleUpdaterId: editUnitResponsibleUpdaterId || null,
             reportCategoryTitle: editUnitCategory.trim() || null,
             reportCategoryOrder: editUnitCategory.trim() ? getCategoryOrder(editUnitCategory.trim()) : 999
         });
@@ -432,7 +442,7 @@ export default function AdminDynamicForms() {
 
     const moveUnit = (unitId: string, direction: 'up' | 'down') => {
         // Ordena para garantir os índices visuais corretos
-        const sortedUnits = [...units].sort((a, b) => (a.order_index ?? 999) - (b.order_index ?? 999));
+        const sortedUnits = [...briefingUnits].sort((a, b) => (a.order_index ?? 999) - (b.order_index ?? 999));
         const idx = sortedUnits.findIndex(u => u.id === unitId);
         if (idx < 0) return;
         if (direction === 'up' && idx === 0) return;
@@ -693,6 +703,23 @@ export default function AdminDynamicForms() {
                                     </p>
                                 </div>
 
+                                <div>
+                                    <label className="input-label">USUÁRIO RESPONSÁVEL PELA ATUALIZAÇÃO</label>
+                                    <select
+                                        value={newUnitResponsibleUpdaterId}
+                                        onChange={e => setNewUnitResponsibleUpdaterId(e.target.value)}
+                                        className="input-field"
+                                    >
+                                        <option value="">Não definido</option>
+                                        {updaterOptions.map(option => (
+                                            <option key={option.id} value={option.id}>{option.name}</option>
+                                        ))}
+                                    </select>
+                                    <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
+                                        Cadastre o acesso ao tópico na Gestão de Usuários para permitir a alimentação.
+                                    </p>
+                                </div>
+
                                 <button
                                     onClick={handleCreateUnit}
                                     disabled={!newUnitName.trim()}
@@ -704,7 +731,7 @@ export default function AdminDynamicForms() {
                         </div>
 
                     <div className="p-6 flex-1 overflow-y-auto space-y-3 custom-scrollbar">
-                        {units.sort((a, b) => (a.order_index ?? 999) - (b.order_index ?? 999)).map((unit, unitIdx) => {
+                        {[...briefingUnits].sort((a, b) => (a.order_index ?? 999) - (b.order_index ?? 999)).map((unit, unitIdx) => {
                             const unitIconDef = getIconByName(unit.description || 'briefcase');
                             const UnitIcon = unitIconDef.icon;
 
@@ -731,7 +758,7 @@ export default function AdminDynamicForms() {
                                             </button>
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); moveUnit(unit.id, 'down'); }}
-                                                disabled={unitIdx === units.length - 1}
+                                                disabled={unitIdx === briefingUnits.length - 1}
                                                 className="p-1 text-pm-secondary hover:text-pm-primary transition-all disabled:opacity-10"
                                             >
                                                 <ChevronDown className="w-4 h-4" />
@@ -762,6 +789,11 @@ export default function AdminDynamicForms() {
                                                         {unit.responsibleSector}
                                                     </span>
                                                 )}
+                                                {unit.responsibleUpdaterId && (
+                                                    <span className={`text-[10px] font-bold uppercase tracking-widest truncate ${selectedUnit === unit.id ? 'text-pm-dark/70' : 'text-pm-secondary/40'}`}>
+                                                        {users.find(candidate => candidate.id === unit.responsibleUpdaterId)?.name || 'Atualizador definido'}
+                                                    </span>
+                                                )}
                                                 {unit.reportCategoryTitle && (
                                                     <span className={`text-[10px] font-bold uppercase tracking-widest truncate ${selectedUnit === unit.id ? 'text-pm-primary' : 'text-pm-secondary/40'}`}>
                                                         {unit.reportCategoryTitle}
@@ -779,6 +811,7 @@ export default function AdminDynamicForms() {
                                             setEditUnitRegion(unit.regionName || '');
                                             setEditUnitAscom(unit.regionalAscom || '');
                                             setEditUnitResponsibleSector(unit.responsibleSector || '');
+                                            setEditUnitResponsibleUpdaterId(unit.responsibleUpdaterId || '');
                                             setEditUnitCategory(unit.reportCategoryTitle || '');
                                         }}
                                         className={`absolute right-4 top-1/2 -translate-y-1/2 p-2.5 rounded-xl transition-all ${selectedUnit === unit.id ? 'bg-pm-primary/10 text-pm-primary hover:bg-pm-primary hover:text-white shadow-sm' : 'bg-transparent text-pm-secondary/20 hover:text-pm-primary hover:bg-white opacity-0 group-hover:opacity-100'}`}
@@ -788,7 +821,7 @@ export default function AdminDynamicForms() {
                                 </div>
                             );
                         })}
-                        {units.length === 0 && (
+                        {briefingUnits.length === 0 && (
                             <p className="text-sm text-pm-secondary italic text-center py-4">Nenhum Tópico cadastrado.</p>
                         )}
                     </div>
@@ -800,7 +833,7 @@ export default function AdminDynamicForms() {
                     <div className="card p-0 overflow-hidden flex flex-col min-h-[700px]">
                         <div className="px-8 py-6 border-b border-pm-secondary/10 bg-pm-light/30">
                             <h3 className="section-title mb-0">2. Seções</h3>
-                            <p className="text-[10px] font-black text-pm-secondary/50 mt-1 uppercase tracking-widest leading-none">Conjuntos de Informação</p>
+                            <p className="text-[10px] font-black text-pm-secondary/50 mt-1 uppercase tracking-widest leading-none">A ordem define a Entrada de Dados e o relatório</p>
                         </div>
 
                         <div className="p-8 bg-pm-light/20 border-b border-pm-secondary/10">
@@ -943,10 +976,11 @@ export default function AdminDynamicForms() {
                                             }`}
                                     >
                                         {/* Setas de Reordenação - Internas */}
-                                        <div className="absolute left-3 top-1/2 -translate-y-1/2 flex flex-col opacity-0 group-hover/dg:opacity-60 hover:!opacity-100 transition-all">
+                                        <div className="absolute left-3 top-1/2 -translate-y-1/2 flex flex-col opacity-70 hover:!opacity-100 transition-all">
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); moveGroup(g.id, 'up'); }}
                                                 disabled={groupIdx === 0}
+                                                title="Mover seção para cima"
                                                 className={`p-1 transition-all disabled:opacity-10 ${selectedGroup === g.id ? 'text-white' : 'text-pm-secondary hover:text-pm-primary'}`}
                                             >
                                                 <ChevronUp className="w-4 h-4" />
@@ -954,6 +988,7 @@ export default function AdminDynamicForms() {
                                             <button
                                                 onClick={(e) => { e.stopPropagation(); moveGroup(g.id, 'down'); }}
                                                 disabled={groupIdx === unitGroups.length - 1}
+                                                title="Mover seção para baixo"
                                                 className={`p-1 transition-all disabled:opacity-10 ${selectedGroup === g.id ? 'text-white' : 'text-pm-secondary hover:text-pm-primary'}`}
                                             >
                                                 <ChevronDown className="w-4 h-4" />
@@ -1014,7 +1049,7 @@ export default function AdminDynamicForms() {
                     <div className="card p-0 overflow-hidden flex flex-col min-h-[700px]">
                         <div className="px-8 py-6 border-b border-pm-secondary/10 bg-pm-light/30">
                             <h3 className="section-title mb-0">3. Campos</h3>
-                            <p className="text-[10px] font-black text-pm-secondary/50 mt-1 uppercase tracking-widest leading-none">Atributos de Pesquisa</p>
+                            <p className="text-[10px] font-black text-pm-secondary/50 mt-1 uppercase tracking-widest leading-none">Ordem interna dos valores e colunas</p>
                         </div>
 
                         {!selectedGroup ? (
@@ -1046,9 +1081,9 @@ export default function AdminDynamicForms() {
                                     {groupFields.map((f, i) => (
                                         <div key={f.id} className="group/field relative bg-white border border-pm-secondary/10 p-5 rounded-3xl shadow-sm hover:border-pm-primary/30 hover:shadow-premium-lg transition-all">
                                             <div className="flex items-center gap-5">
-                                                <div className="flex flex-col opacity-0 group-hover/field:opacity-100 transition-all scale-90 -translate-x-2 group-hover:translate-x-0">
-                                                    <button onClick={() => moveField(f.id, 'up')} disabled={i === 0} className="p-1 text-pm-secondary hover:text-pm-primary transition-all disabled:opacity-10"><ChevronUp className="w-4 h-4" /></button>
-                                                    <button onClick={() => moveField(f.id, 'down')} disabled={i === groupFields.length - 1} className="p-1 text-pm-secondary hover:text-pm-primary transition-all disabled:opacity-10"><ChevronDown className="w-4 h-4" /></button>
+                                                <div className="flex flex-col opacity-70 hover:opacity-100 transition-all">
+                                                    <button onClick={() => moveField(f.id, 'up')} disabled={i === 0} title="Mover campo para cima" className="p-1 text-pm-secondary hover:text-pm-primary transition-all disabled:opacity-10"><ChevronUp className="w-4 h-4" /></button>
+                                                    <button onClick={() => moveField(f.id, 'down')} disabled={i === groupFields.length - 1} title="Mover campo para baixo" className="p-1 text-pm-secondary hover:text-pm-primary transition-all disabled:opacity-10"><ChevronDown className="w-4 h-4" /></button>
                                                 </div>
 
                                                 <div className="flex-1 overflow-hidden">
@@ -1170,6 +1205,22 @@ export default function AdminDynamicForms() {
                                 />
                                 <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
                                     Este setor será exibido no dashboard e nos relatórios do tópico.
+                                </p>
+                            </div>
+                            <div>
+                                <label className="input-label">USUÁRIO RESPONSÁVEL PELA ATUALIZAÇÃO</label>
+                                <select
+                                    value={editUnitResponsibleUpdaterId}
+                                    onChange={e => setEditUnitResponsibleUpdaterId(e.target.value)}
+                                    className="input-field h-14"
+                                >
+                                    <option value="">Não definido</option>
+                                    {updaterOptions.map(option => (
+                                        <option key={option.id} value={option.id}>{option.name}</option>
+                                    ))}
+                                </select>
+                                <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
+                                    O responsável precisa possuir acesso ao tópico na Gestão de Usuários.
                                 </p>
                             </div>
                             <div>

@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth, Role } from '../../store/AuthContext';
-import { Plus, Search, Shield, User, X, Loader2, Edit2, Key, Power, PowerOff, Trash2, AlertTriangle, CheckCircle2, Check, Printer } from 'lucide-react';
+import { Plus, Search, Shield, User, X, Loader2, Edit2, Key, Power, PowerOff, Trash2, AlertTriangle, CheckCircle2, Check, Printer, Filter, UsersRound } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { useReactToPrint } from 'react-to-print';
 import { useRef } from 'react';
 import UserReport from './UserReport';
 import { compareTextPtBr, sortByTextPtBr } from '../../utils/textOrdering';
+import { isGeneralBriefingUnit } from '../../utils/generalBriefingUnits';
 
 // Tipo Extendido exclusivo para visualização via API
 interface AdminUser {
@@ -21,12 +22,15 @@ interface AdminUser {
 }
 
 export default function UsersPanel() {
-    const { user, units } = useAuth();
+    const { user, units, regionalCommands } = useAuth();
     const [usersList, setUsersList] = useState<AdminUser[]>([]);
     const [isLoadingUsers, setIsLoadingUsers] = useState(false);
 
     // Status Flow
     const [searchTerm, setSearchTerm] = useState('');
+    const [roleFilter, setRoleFilter] = useState<Role | 'all'>('all');
+    const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
+    const [unitFilter, setUnitFilter] = useState('all');
     const [toastMsg, setToastMsg] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
     // Modals Visibility
@@ -44,6 +48,7 @@ export default function UsersPanel() {
     const [formPassword, setFormPassword] = useState('');
     const [formRole, setFormRole] = useState<Role>('editor');
     const [formUnitIds, setFormUnitIds] = useState<string[]>([]);
+    const [topicSearchTerm, setTopicSearchTerm] = useState('');
     const [deleteConfirm, setDeleteConfirm] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
     
@@ -204,11 +209,19 @@ export default function UsersPanel() {
         );
     };
 
+    const resetFilters = () => {
+        setSearchTerm('');
+        setRoleFilter('all');
+        setStatusFilter('all');
+        setUnitFilter('all');
+    };
+
     const openEdit = (u: AdminUser) => {
         setSelectedUser(u);
         setFormName(u.full_name);
         setFormRole(u.role);
-        setFormUnitIds(u.unit_ids || []);
+        setFormUnitIds((u.unit_ids || []).filter(unitId => generalTopicIds.has(unitId)));
+        setTopicSearchTerm('');
         setIsEditOpen(true);
     };
 
@@ -224,23 +237,90 @@ export default function UsersPanel() {
         setIsDeleteOpen(true);
     };
 
-    const filteredUsers = usersList
+    const sortedTopics = sortByTextPtBr(
+        units.filter(unit => isGeneralBriefingUnit(unit, regionalCommands)),
+        unit => unit.name
+    );
+    const generalTopicIds = new Set(sortedTopics.map(unit => unit.id));
+    const getVisibleUserTopics = (listedUser: AdminUser) => sortedTopics.filter(topic => listedUser.unit_ids?.includes(topic.id));
+    const reportUsers = usersList.map(listedUser => {
+        const topicNames = getVisibleUserTopics(listedUser).map(topic => topic.name);
+        return {
+            ...listedUser,
+            unit_ids: listedUser.unit_ids.filter(unitId => generalTopicIds.has(unitId)),
+            unit_names: topicNames,
+            unit_name: topicNames.join(', ')
+        };
+    });
+    const normalizedSearchTerm = searchTerm.trim().toLocaleLowerCase('pt-BR');
+    const filteredUsers = reportUsers
+        .filter(u => {
+            const visibleTopics = getVisibleUserTopics(u);
+            return !normalizedSearchTerm ||
+                u.full_name?.toLocaleLowerCase('pt-BR').includes(normalizedSearchTerm) ||
+                u.email?.toLocaleLowerCase('pt-BR').includes(normalizedSearchTerm) ||
+                visibleTopics.some(topic => topic.name.toLocaleLowerCase('pt-BR').includes(normalizedSearchTerm));
+        })
+        .filter(u => roleFilter === 'all' || u.role === roleFilter)
         .filter(u =>
-            u.full_name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            u.email?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            u.unit_name?.toLowerCase().includes(searchTerm.toLowerCase())
+            statusFilter === 'all'
+            || (statusFilter === 'active' && u.is_active)
+            || (statusFilter === 'inactive' && !u.is_active)
+        )
+        .filter(u =>
+            unitFilter === 'all'
+            || (unitFilter === 'unassigned' && !u.unit_ids?.some(unitId => generalTopicIds.has(unitId)))
+            || u.unit_ids?.includes(unitFilter)
         )
         .sort((a, b) => compareTextPtBr(a.full_name || a.email, b.full_name || b.email));
+
+    const normalizedTopicSearch = topicSearchTerm.trim().toLocaleLowerCase('pt-BR');
+    const visibleFormTopics = sortedTopics.filter(unit =>
+        !normalizedTopicSearch || unit.name.toLocaleLowerCase('pt-BR').includes(normalizedTopicSearch)
+    );
 
     // Componente interno: seletor de tópicos com checkboxes
     const TopicsSelector = () => (
         <div>
-            <label className="block text-xs font-bold mb-2 text-pm-primary">Tópicos Atrelados</label>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <label className="block text-xs font-bold text-pm-primary">Tópicos Atrelados</label>
+                <div className="flex gap-1.5">
+                    <button
+                        type="button"
+                        onClick={() => setFormUnitIds(sortedTopics.map(unit => unit.id))}
+                        disabled={sortedTopics.length === 0 || formUnitIds.length === sortedTopics.length}
+                        className="rounded-md border border-pm-primary/20 bg-pm-primary/5 px-2 py-1 text-[10px] font-black uppercase text-pm-primary hover:bg-pm-primary/10 disabled:opacity-40"
+                    >
+                        Selecionar todos
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setFormUnitIds([])}
+                        disabled={formUnitIds.length === 0}
+                        className="rounded-md border border-pm-secondary/20 px-2 py-1 text-[10px] font-black uppercase text-pm-secondary hover:bg-pm-light disabled:opacity-40"
+                    >
+                        Limpar
+                    </button>
+                </div>
+            </div>
+            <div className="relative mb-2">
+                <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-pm-secondary" />
+                <input
+                    type="text"
+                    value={topicSearchTerm}
+                    onChange={event => setTopicSearchTerm(event.target.value)}
+                    placeholder="Buscar tópico..."
+                    className="w-full rounded-lg border border-pm-secondary/25 py-2 pl-9 pr-3 text-xs outline-none focus:ring-2 focus:ring-pm-primary/20"
+                />
+            </div>
             <div className="border border-pm-primary/40 rounded-lg max-h-44 overflow-y-auto divide-y divide-pm-secondary/10">
-                {units.length === 0 && (
+                {sortedTopics.length === 0 && (
                     <p className="text-xs text-pm-secondary p-3">Nenhum tópico cadastrado.</p>
                 )}
-                {sortByTextPtBr(units, unit => unit.name).map(u => {
+                {sortedTopics.length > 0 && visibleFormTopics.length === 0 && (
+                    <p className="text-xs text-pm-secondary p-3">Nenhum tópico encontrado.</p>
+                )}
+                {visibleFormTopics.map(u => {
                     const isChecked = formUnitIds.includes(u.id);
                     return (
                         <button
@@ -261,7 +341,7 @@ export default function UsersPanel() {
             </div>
             {formUnitIds.length > 0 && (
                 <p className="text-xs text-pm-primary mt-1.5 font-medium">
-                    {formUnitIds.length} tópico{formUnitIds.length > 1 ? 's' : ''} selecionado{formUnitIds.length > 1 ? 's' : ''}
+                    {formUnitIds.filter(unitId => generalTopicIds.has(unitId)).length} de {sortedTopics.length} tópico{sortedTopics.length !== 1 ? 's' : ''} selecionado{formUnitIds.length > 1 ? 's' : ''}
                 </p>
             )}
         </div>
@@ -294,6 +374,7 @@ export default function UsersPanel() {
                     <button
                         onClick={() => {
                             setFormName(''); setFormEmail(''); setFormPassword(''); setFormRole('editor'); setFormUnitIds([]);
+                            setTopicSearchTerm('');
                             setIsCreateOpen(true);
                         }}
                         className="bg-pm-primary text-pm-light px-4 py-2 rounded-lg text-sm font-black hover:bg-pm-primary/90 transition-all flex items-center gap-2 shadow-md whitespace-nowrap active:scale-95"
@@ -307,21 +388,72 @@ export default function UsersPanel() {
             {/* Renderer Invisível do PDF */}
             <div style={{ display: 'none' }}>
                 <div ref={printRef}>
-                    <UserReport users={usersList} />
+                    <UserReport users={reportUsers} />
                 </div>
             </div>
 
             <div className="bg-white rounded-xl shadow-sm border border-pm-secondary/20 overflow-hidden">
-                <div className="p-4 border-b border-pm-secondary/10 flex items-center justify-between gap-4 bg-pm-light/30">
-                    <div className="relative flex-1 max-w-md">
-                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-pm-secondary" />
-                        <input
-                            type="text"
-                            placeholder="Buscar por nome, email ou tópico..."
-                            value={searchTerm}
-                            onChange={(e) => setSearchTerm(e.target.value)}
-                            className="w-full pl-9 pr-4 py-2 text-sm border border-pm-secondary/30 rounded-lg focus:ring-2 focus:ring-pm-primary outline-none"
-                        />
+                <div className="p-5 border-b border-pm-secondary/10 bg-pm-light/30 space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                            <Filter className="h-4 w-4 text-pm-primary" />
+                            <h3 className="text-xs font-black uppercase tracking-widest text-pm-dark">Filtros de usuários</h3>
+                        </div>
+                        <div className="flex items-center gap-3 text-xs font-bold text-pm-secondary">
+                            <span className="flex items-center gap-1">
+                                <UsersRound className="h-4 w-4" />
+                                {filteredUsers.length} de {usersList.length}
+                            </span>
+                            <button
+                                type="button"
+                                onClick={resetFilters}
+                                className="text-pm-primary hover:underline"
+                            >
+                                Limpar filtros
+                            </button>
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                        <div className="relative">
+                            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-pm-secondary" />
+                            <input
+                                type="text"
+                                placeholder="Nome, e-mail ou tópico..."
+                                value={searchTerm}
+                                onChange={(e) => setSearchTerm(e.target.value)}
+                                className="w-full pl-9 pr-4 py-2.5 text-sm border border-pm-secondary/30 rounded-lg bg-white focus:ring-2 focus:ring-pm-primary outline-none"
+                            />
+                        </div>
+                        <select
+                            value={roleFilter}
+                            onChange={event => setRoleFilter(event.target.value as Role | 'all')}
+                            className="w-full rounded-lg border border-pm-secondary/30 bg-white px-3 py-2.5 text-sm font-medium text-pm-dark outline-none focus:ring-2 focus:ring-pm-primary"
+                        >
+                            <option value="all">Todos os perfis</option>
+                            <option value="admin">Administradores</option>
+                            <option value="commander">Comandantes</option>
+                            <option value="editor">Editores</option>
+                        </select>
+                        <select
+                            value={statusFilter}
+                            onChange={event => setStatusFilter(event.target.value as 'all' | 'active' | 'inactive')}
+                            className="w-full rounded-lg border border-pm-secondary/30 bg-white px-3 py-2.5 text-sm font-medium text-pm-dark outline-none focus:ring-2 focus:ring-pm-primary"
+                        >
+                            <option value="all">Todos os status</option>
+                            <option value="active">Ativos</option>
+                            <option value="inactive">Inativos</option>
+                        </select>
+                        <select
+                            value={unitFilter}
+                            onChange={event => setUnitFilter(event.target.value)}
+                            className="w-full rounded-lg border border-pm-secondary/30 bg-white px-3 py-2.5 text-sm font-medium text-pm-dark outline-none focus:ring-2 focus:ring-pm-primary"
+                        >
+                            <option value="all">Todos os tópicos</option>
+                            <option value="unassigned">Sem tópico atribuído</option>
+                            {sortedTopics.map(unit => (
+                                <option key={unit.id} value={unit.id}>{unit.name}</option>
+                            ))}
+                        </select>
                     </div>
                     {isLoadingUsers && <Loader2 className="w-5 h-5 text-pm-primary animate-spin" />}
                 </div>
@@ -352,11 +484,11 @@ export default function UsersPanel() {
                                         </div>
                                     </td>
                                     <td className="px-6 py-4">
-                                        {u.unit_names && u.unit_names.length > 0 ? (
+                                        {getVisibleUserTopics(u).length > 0 ? (
                                             <div className="flex flex-wrap gap-1">
-                                                {[...u.unit_names].sort(compareTextPtBr).map((name, i) => (
-                                                    <span key={i} className="px-2 py-0.5 bg-pm-primary/10 text-pm-primary border border-pm-primary/20 rounded-full text-[10px] font-semibold">
-                                                        {name}
+                                                {getVisibleUserTopics(u).map(topic => (
+                                                    <span key={topic.id} className="px-2 py-0.5 bg-pm-primary/10 text-pm-primary border border-pm-primary/20 rounded-full text-[10px] font-semibold">
+                                                        {topic.name}
                                                     </span>
                                                 ))}
                                             </div>

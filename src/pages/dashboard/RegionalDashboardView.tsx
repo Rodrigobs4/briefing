@@ -1,13 +1,23 @@
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import {
   Activity,
   BarChart3,
   Clock,
   MapPinned,
   Search,
+  TrendingUp,
 } from "lucide-react";
 import { useAuth } from "../../store/AuthContext";
 import { compareTextPtBr } from "../../utils/textOrdering";
+
+const RegionalCategoryChart = lazy(() =>
+  import("./components/DashboardCharts").then((module) => ({ default: module.RegionalCategoryChart })),
+);
+const RegionalCompositionChart = lazy(() =>
+  import("./components/DashboardCharts").then((module) => ({ default: module.RegionalCompositionChart })),
+);
+
+const ChartFallback = () => <div className="h-full w-full animate-pulse rounded-2xl bg-pm-light/70" />;
 
 const formatDate = (value?: string | null) =>
   value ? new Date(value).toLocaleString("pt-BR") : "Sem atualização";
@@ -90,10 +100,27 @@ export default function RegionalDashboardView() {
   const categories = Array.from(
     new Set(sectionStatus.map((item) => item.section.categoryTitle)),
   ).sort(compareTextPtBr);
+  const categoryAnalytics = categories
+    .map((category) => {
+      const records = sectionStatus
+        .filter((item) => item.section.categoryTitle === category)
+        .reduce((total, item) => total + item.total, 0);
+      return {
+        category:
+          category.length > 18 ? `${category.slice(0, 16)}...` : category,
+        records,
+      };
+    })
+    .sort((a, b) => b.records - a.records)
+    .slice(0, 7);
+  const recordComposition = [
+    { name: "Indicadores", value: commandEntries.length, color: "#90846C" },
+    { name: "Registros", value: commandItems.length, color: "#172433" },
+  ].filter((item) => item.value > 0);
 
   return (
-    <div className="space-y-8">
-      <div className="bg-white p-5 rounded-2xl shadow-premium border border-pm-secondary/15 flex flex-wrap gap-4 items-center justify-between">
+    <div className="space-y-7">
+      <div className="bg-white p-5 rounded-3xl shadow-premium border border-pm-secondary/15 flex flex-wrap gap-4 items-center justify-between">
         <div className="flex flex-col">
           <span className="text-xs font-black text-pm-secondary/60 uppercase tracking-[0.15em]">
             Filtro de Comando
@@ -106,7 +133,7 @@ export default function RegionalDashboardView() {
           <select
             value={selectedCommandId}
             onChange={(event) => setSelectedCommandId(event.target.value)}
-            className="bg-pm-light/50 border border-pm-secondary/20 text-sm font-bold rounded-xl px-4 py-2.5 text-pm-dark outline-none min-w-[260px]"
+            className="bg-pm-light/50 border border-pm-secondary/20 text-sm font-bold rounded-xl px-4 py-2.5 text-pm-dark outline-none focus:border-pm-primary/40 focus:ring-4 focus:ring-pm-primary/10 min-w-[260px]"
           >
             <option value="all">Todos os comandos regionais</option>
             {activeCommands.map((command) => (
@@ -121,7 +148,7 @@ export default function RegionalDashboardView() {
               value={searchTerm}
               onChange={(event) => setSearchTerm(event.target.value)}
               placeholder="Buscar seção"
-              className="bg-pm-light/50 border border-pm-secondary/20 text-sm font-bold rounded-xl pl-9 pr-4 py-2.5 text-pm-dark outline-none min-w-[220px]"
+              className="bg-pm-light/50 border border-pm-secondary/20 text-sm font-bold rounded-xl pl-9 pr-4 py-2.5 text-pm-dark outline-none focus:border-pm-primary/40 focus:ring-4 focus:ring-pm-primary/10 min-w-[220px]"
             />
           </div>
         </div>
@@ -183,6 +210,55 @@ export default function RegionalDashboardView() {
             </h4>
           </div>
         </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[1.35fr_0.85fr] gap-5">
+        <section className="rounded-3xl border border-pm-secondary/15 bg-white p-6 shadow-premium">
+          <div className="mb-5 flex items-start justify-between gap-4">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-pm-secondary">
+                Distribuição regional
+              </p>
+              <h3 className="mt-1 text-xl font-black text-pm-dark">
+                Registros por tópico
+              </h3>
+            </div>
+            <span className="badge badge-primary">
+              <TrendingUp className="h-3 w-3" />
+              Consolidado
+            </span>
+          </div>
+          {categoryAnalytics.length > 0 ? (
+            <div className="h-[285px]">
+              <Suspense fallback={<ChartFallback />}>
+                <RegionalCategoryChart data={categoryAnalytics} />
+              </Suspense>
+            </div>
+          ) : (
+            <p className="py-20 text-center text-sm font-bold text-pm-secondary">Sem dados para os filtros atuais.</p>
+          )}
+        </section>
+
+        <section className="rounded-3xl border border-pm-secondary/15 bg-white p-6 shadow-premium">
+          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-pm-secondary">
+            Composição dos dados
+          </p>
+          <h3 className="mt-1 text-xl font-black text-pm-dark">Tipo de registro</h3>
+          <div className="h-[190px]">
+            <Suspense fallback={<ChartFallback />}>
+              <RegionalCompositionChart data={recordComposition} />
+            </Suspense>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            {recordComposition.map((item) => (
+              <div key={item.name} className="rounded-xl bg-pm-light/60 p-3 text-center">
+                <span className="mx-auto mb-1 block h-2 w-2 rounded-full" style={{ background: item.color }} />
+                <strong className="block text-2xl text-pm-dark">{item.value}</strong>
+                <span className="text-[9px] font-black uppercase text-pm-secondary">{item.name}</span>
+              </div>
+            ))}
+          </div>
+        </section>
       </div>
 
       <div className="space-y-8">

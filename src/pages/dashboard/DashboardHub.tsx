@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { BarChart3, ClipboardList, FileText, MapPinned, X } from "lucide-react";
+import { BarChart3, ClipboardList, FileText, MapPinned, ShieldCheck, Sparkles, X } from "lucide-react";
 import DashboardExecutivo from "./DashboardExecutivo";
 import RegionalDashboardView from "./RegionalDashboardView";
 import ReportBuilderModal from "./components/ReportBuilderModal";
@@ -19,48 +19,61 @@ export default function DashboardHub() {
   };
 
   return (
-    <div className="space-y-8">
-      <div className="bg-white rounded-3xl border border-pm-secondary/15 shadow-sm p-6 flex flex-col xl:flex-row xl:items-end justify-between gap-5">
-        <div>
-          <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.18em] text-pm-secondary">
-            <BarChart3 className="w-4 h-4 text-pm-primary" />
-            Painel Estratégico
+    <div className="space-y-7">
+      <div className="relative overflow-hidden rounded-[2rem] bg-pm-dark px-6 py-7 text-white shadow-xl sm:px-8 lg:px-10">
+        <div className="pointer-events-none absolute -right-16 -top-32 h-72 w-72 rounded-full bg-pm-primary/30 blur-3xl" />
+        <div className="pointer-events-none absolute bottom-0 left-[36%] h-32 w-80 rounded-full bg-white/5 blur-3xl" />
+        <div className="relative flex flex-col gap-8 xl:flex-row xl:items-end xl:justify-between">
+          <div className="max-w-3xl">
+            <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.24em] text-pm-primary-light">
+              <ShieldCheck className="w-4 h-4 text-pm-primary" />
+              Centro de inteligência estratégica
+            </div>
+            <h2 className="mt-3 text-3xl font-black tracking-tight sm:text-4xl">
+              Painel Executivo <span className="text-pm-primary">PMBA</span>
+            </h2>
+            <p className="mt-3 max-w-2xl text-sm font-medium leading-relaxed text-white/65">
+              Indicadores operacionais, registros críticos e evidências consolidados em uma leitura gerencial para decisão.
+            </p>
+            <div className="mt-6 flex flex-wrap gap-2">
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-white/75">
+                <Sparkles className="h-3.5 w-3.5 text-pm-primary" />
+                Monitoramento executivo
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-3 py-1.5 text-[10px] font-black uppercase tracking-wider text-white/75">
+                <BarChart3 className="h-3.5 w-3.5 text-pm-primary" />
+                Dados atualizados pelo briefing
+              </span>
+            </div>
           </div>
-          <h2 className="text-3xl font-black text-pm-dark tracking-tight mt-1">
-            BRIEFING
-          </h2>
-          <p className="text-sm text-pm-secondary mt-1 max-w-3xl">
-            Use a chave abaixo para alternar entre o briefing geral e o briefing
-            regional no mesmo painel.
-          </p>
-        </div>
 
-        <div className="flex flex-col gap-3 shrink-0 w-full sm:w-auto">
-          <div className="bg-pm-light border border-pm-secondary/15 rounded-2xl p-1.5 flex">
+          <div className="flex w-full shrink-0 flex-col gap-3 sm:w-auto">
+            <div className="flex rounded-2xl border border-white/10 bg-white/5 p-1.5 backdrop-blur-sm">
+              <button
+                onClick={() => setActiveView("general")}
+                className={`flex-1 sm:flex-none px-5 py-3 rounded-xl text-xs font-black uppercase flex items-center justify-center gap-2 transition-colors ${activeView === "general" ? "bg-white text-pm-dark shadow-lg" : "text-white/65 hover:text-white"}`}
+              >
+                <ClipboardList className="w-4 h-4" />
+                Geral
+              </button>
+              <button
+                onClick={() => setActiveView("regional")}
+                className={`flex-1 sm:flex-none px-5 py-3 rounded-xl text-xs font-black uppercase flex items-center justify-center gap-2 transition-colors ${activeView === "regional" ? "bg-white text-pm-dark shadow-lg" : "text-white/65 hover:text-white"}`}
+              >
+                <MapPinned className="w-4 h-4" />
+                Regional
+              </button>
+            </div>
             <button
-              onClick={() => setActiveView("general")}
-              className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-black uppercase flex items-center justify-center gap-2 transition-colors ${activeView === "general" ? "bg-white text-pm-dark shadow-sm" : "text-pm-secondary hover:text-pm-dark"}`}
+              onClick={() => setIsReportModalOpen(true)}
+              className="flex items-center justify-center gap-2 rounded-xl bg-pm-primary px-5 py-3 text-sm font-black text-white shadow-lg shadow-black/10 transition-all hover:bg-pm-primary-hover"
             >
-              <ClipboardList className="w-4 h-4" />
-              Geral
-            </button>
-            <button
-              onClick={() => setActiveView("regional")}
-              className={`flex-1 sm:flex-none px-4 py-2.5 rounded-xl text-xs font-black uppercase flex items-center justify-center gap-2 transition-colors ${activeView === "regional" ? "bg-white text-pm-dark shadow-sm" : "text-pm-secondary hover:text-pm-dark"}`}
-            >
-              <MapPinned className="w-4 h-4" />
-              Regional
+              <FileText className="w-4 h-4" />
+              {activeView === "general"
+                ? "Gerar relatório geral"
+                : "Gerar relatório regional"}
             </button>
           </div>
-          <button
-            onClick={() => setIsReportModalOpen(true)}
-            className="px-5 py-2.5 rounded-xl bg-red-600 text-white text-sm font-black shadow-sm hover:bg-red-700 transition-all flex items-center justify-center gap-2"
-          >
-            <FileText className="w-4 h-4" />
-            {activeView === "general"
-              ? "Imprimir briefing geral"
-              : "Imprimir briefing regional"}
-          </button>
         </div>
       </div>
 

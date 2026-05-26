@@ -26,6 +26,7 @@ import { useReactToPrint } from 'react-to-print';
 import ReportPdfRenderer from './ReportPdfRenderer';
 import { supabase } from '../../../lib/supabase';
 import { compareTextPtBr, sortByTextPtBr } from '../../../utils/textOrdering';
+import { isGeneralBriefingUnit } from '../../../utils/generalBriefingUnits';
 
 type ReportHighlightTarget = 'row' | 'column' | 'cell';
 type ReportHighlightColor = 'khaki' | 'blue' | 'green' | 'amber' | 'red';
@@ -75,48 +76,9 @@ const isReportHighlightColor = (value: unknown): value is ReportHighlightColor =
     REPORT_HIGHLIGHT_COLORS.some(color => color.value === value);
 const GLOBAL_REPORT_CONFIGURATION_ID = 'general';
 
-const normalizeRegionalKey = (value?: string | null) =>
-    (value || '')
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[_\-\s]+/g, ' ')
-        .trim()
-        .toLowerCase();
-
-const FALLBACK_REGIONAL_COMMAND_KEYS = new Set([
-    'cprms',
-    'atlantico',
-    'baia de todos os santos',
-    'central',
-    'norte',
-    'sul',
-    'leste',
-    'sudoeste',
-    'oeste',
-    'chapada',
-    'cpme',
-    'comando de operacoes especializadas'
-]);
-
-function isRegionalCommandAsUnit(
-    unit: { name: string },
-    regionalCommands: Array<{ code: string; name: string }>
-) {
-    const unitName = normalizeRegionalKey(unit.name);
-    const commandKeys = new Set([
-        ...regionalCommands.flatMap(command => [
-            normalizeRegionalKey(command.code),
-            normalizeRegionalKey(command.name)
-        ]),
-        ...FALLBACK_REGIONAL_COMMAND_KEYS
-    ]);
-
-    return commandKeys.has(unitName);
-}
-
 export default function ReportBuilderModal({ onClose }: { onClose: () => void }) {
     const { units: allUnits, regionalCommands, dataGroups, user } = useAuth();
-    const reportUnits = sortByTextPtBr(allUnits.filter(unit => !isRegionalCommandAsUnit(unit, regionalCommands)), unit => unit.name);
+    const reportUnits = sortByTextPtBr(allUnits.filter(unit => isGeneralBriefingUnit(unit, regionalCommands)), unit => unit.name);
     const editorUnitIds = user?.unitIds && user.unitIds.length > 0
         ? user.unitIds
         : user?.unitId

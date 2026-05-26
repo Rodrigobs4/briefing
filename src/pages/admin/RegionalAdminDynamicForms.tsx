@@ -45,6 +45,7 @@ const makeCode = (value: string) => `${slugify(value)}_${crypto.randomUUID().sli
 export default function RegionalAdminDynamicForms() {
     const {
         regionalBriefingSections,
+        regionalBriefingTopics,
         regionalBriefingFields,
         regionalBriefingValues,
         regionalBriefingCollectionValues,
@@ -55,17 +56,17 @@ export default function RegionalAdminDynamicForms() {
         .filter(section => section.isActive)
         .sort((a, b) => a.categoryOrder - b.categoryOrder || a.orderIndex - b.orderIndex);
 
-    const categories = useMemo(() => activeSections.reduce<{ title: string; order: number; count: number }[]>((acc, section) => {
-        const title = section.categoryTitle?.trim() || 'Sem categoria';
-        const existing = acc.find(item => item.title === title);
-        if (existing) {
-            existing.count += 1;
-            existing.order = Math.min(existing.order, section.categoryOrder ?? 999);
-            return acc;
-        }
-        acc.push({ title, order: section.categoryOrder ?? 999, count: 1 });
-        return acc;
-    }, []).sort((a, b) => a.order - b.order), [activeSections]);
+    const categories = useMemo(() => regionalBriefingTopics
+        .filter(topic => topic.isActive)
+        .sort((a, b) => a.orderIndex - b.orderIndex || a.name.localeCompare(b.name, 'pt-BR'))
+        .map(topic => ({
+            id: topic.id,
+            title: topic.name,
+            order: topic.orderIndex,
+            count: activeSections.filter(section =>
+                section.topicId === topic.id || (!section.topicId && section.categoryTitle === topic.name)
+            ).length
+        })), [activeSections, regionalBriefingTopics]);
 
     const [selectedCategory, setSelectedCategory] = useState(categories[0]?.title || '');
     const [selectedSection, setSelectedSection] = useState<string | null>(null);
@@ -74,9 +75,11 @@ export default function RegionalAdminDynamicForms() {
     const [newSectionMode, setNewSectionMode] = useState<RegionalSectionMode>('snapshot');
     const [newSectionFrequency, setNewSectionFrequency] = useState<RegionalFrequency>('custom');
     const [sectionSearch, setSectionSearch] = useState('');
+    const [editingTopic, setEditingTopic] = useState<{ id: string; title: string; order: number } | null>(null);
+    const [editTopicTitle, setEditTopicTitle] = useState('');
     const [editingSection, setEditingSection] = useState<RegionalBriefingSection | null>(null);
     const [editSectionTitle, setEditSectionTitle] = useState('');
-    const [editSectionCategory, setEditSectionCategory] = useState('');
+    const [editSectionTopicId, setEditSectionTopicId] = useState('');
     const [editSectionMode, setEditSectionMode] = useState<RegionalSectionMode>('snapshot');
     const [editSectionFrequency, setEditSectionFrequency] = useState<RegionalFrequency>('custom');
     const [editingField, setEditingField] = useState<RegionalBriefingField | null>(null);
@@ -94,7 +97,10 @@ export default function RegionalAdminDynamicForms() {
         }
     }, [categories, selectedCategory]);
 
-    const selectedCategorySections = activeSections.filter(section => section.categoryTitle === selectedCategory);
+    const selectedTopic = categories.find(category => category.title === selectedCategory) ?? null;
+    const selectedCategorySections = activeSections.filter(section =>
+        section.topicId === selectedTopic?.id || (!section.topicId && section.categoryTitle === selectedCategory)
+    );
     const visibleSections = selectedCategorySections.filter(section =>
         `${section.title} ${section.categoryTitle}`.toLowerCase().includes(sectionSearch.toLowerCase())
     );
@@ -107,23 +113,32 @@ export default function RegionalAdminDynamicForms() {
         await refreshData();
     };
 
-    const createCategory = () => {
+    const createCategory = async () => {
         if (!newCategoryTitle.trim()) return;
-        setSelectedCategory(newCategoryTitle.trim());
+        const topicName = newCategoryTitle.trim();
+        const { error } = await supabase.from('regional_briefing_topics').insert({
+            name: topicName,
+            order_index: categories.length + 1,
+            is_active: true
+        });
+        if (error) {
+            console.error('Erro ao criar tópico regional:', error);
+            return;
+        }
+        setSelectedCategory(topicName);
         setNewCategoryTitle('');
         setSelectedSection(null);
+        await sync();
     };
 
     const createSection = async () => {
-        const categoryTitle = selectedCategory || newCategoryTitle.trim();
-        if (!newSectionTitle.trim() || !categoryTitle) return;
-
-        const existingCategory = categories.find(category => category.title === categoryTitle);
+        if (!newSectionTitle.trim() || !selectedTopic) return;
         const { data, error } = await supabase.from('regional_briefing_sections').insert({
+            topic_id: selectedTopic.id,
             code: makeCode(newSectionTitle),
             title: newSectionTitle.trim(),
-            category_title: categoryTitle,
-            category_order: existingCategory?.order ?? categories.length + 1,
+            category_title: selectedTopic.title,
+            category_order: selectedTopic.order,
             order_index: selectedCategorySections.length + 1,
             mode: newSectionMode,
             source_strategy: 'manual',
@@ -136,7 +151,6 @@ export default function RegionalAdminDynamicForms() {
             return;
         }
 
-        setSelectedCategory(categoryTitle);
         setSelectedSection(data.id);
         setNewSectionTitle('');
         setNewSectionMode('snapshot');
@@ -144,14 +158,35 @@ export default function RegionalAdminDynamicForms() {
         await sync();
     };
 
+    const updateTopic = async () => {
+        if (!editingTopic || !editTopicTitle.trim()) return;
+        const topicTitle = editTopicTitle.trim();
+        const { error } = await supabase.from('regional_briefing_topics').update({
+            name: topicTitle
+        }).eq('id', editingTopic.id);
+        if (error) {
+            console.error('Erro ao atualizar tópico regional:', error);
+            return;
+        }
+
+        await supabase.from('regional_briefing_sections').update({
+            category_title: topicTitle,
+            category_order: editingTopic.order
+        }).eq('topic_id', editingTopic.id);
+        setSelectedCategory(topicTitle);
+        setEditingTopic(null);
+        await sync();
+    };
+
     const updateSection = async () => {
-        if (!editingSection || !editSectionTitle.trim() || !editSectionCategory.trim()) return;
-        const existingCategory = categories.find(category => category.title === editSectionCategory.trim());
+        const topic = categories.find(category => category.id === editSectionTopicId);
+        if (!editingSection || !editSectionTitle.trim() || !topic) return;
 
         const { error } = await supabase.from('regional_briefing_sections').update({
+            topic_id: topic.id,
             title: editSectionTitle.trim(),
-            category_title: editSectionCategory.trim(),
-            category_order: existingCategory?.order ?? categories.length + 1,
+            category_title: topic.title,
+            category_order: topic.order,
             mode: editSectionMode,
             update_frequency: editSectionFrequency
         }).eq('id', editingSection.id);
@@ -161,19 +196,21 @@ export default function RegionalAdminDynamicForms() {
             return;
         }
 
-        setSelectedCategory(editSectionCategory.trim());
+        setSelectedCategory(topic.title);
         setEditingSection(null);
         await sync();
     };
 
-    const moveCategory = async (categoryTitle: string, direction: 'up' | 'down') => {
-        const index = categories.findIndex(category => category.title === categoryTitle);
+    const moveCategory = async (topicId: string, direction: 'up' | 'down') => {
+        const index = categories.findIndex(category => category.id === topicId);
         if (index < 0 || (direction === 'up' && index === 0) || (direction === 'down' && index === categories.length - 1)) return;
         const target = categories[direction === 'up' ? index - 1 : index + 1];
         const current = categories[index];
 
-        await supabase.from('regional_briefing_sections').update({ category_order: target.order }).eq('category_title', current.title);
-        await supabase.from('regional_briefing_sections').update({ category_order: current.order }).eq('category_title', target.title);
+        await supabase.from('regional_briefing_topics').update({ order_index: target.order }).eq('id', current.id);
+        await supabase.from('regional_briefing_topics').update({ order_index: current.order }).eq('id', target.id);
+        await supabase.from('regional_briefing_sections').update({ category_order: target.order }).eq('topic_id', current.id);
+        await supabase.from('regional_briefing_sections').update({ category_order: current.order }).eq('topic_id', target.id);
         await sync();
     };
 
@@ -191,6 +228,7 @@ export default function RegionalAdminDynamicForms() {
 
     const duplicateSection = async (section: RegionalBriefingSection) => {
         const { data, error } = await supabase.from('regional_briefing_sections').insert({
+            topic_id: section.topicId ?? selectedTopic?.id ?? null,
             code: makeCode(`${section.title}_copia`),
             title: `${section.title} (Cópia)`,
             category_title: section.categoryTitle,
@@ -353,7 +391,7 @@ export default function RegionalAdminDynamicForms() {
                     <div>
                         <h1 className="text-2xl font-black text-pm-dark tracking-tight">Arquitetura Regional</h1>
                         <p className="text-xs font-bold text-pm-secondary/60 uppercase tracking-widest mt-0.5">
-                            Gerenciamento das categorias, seções e campos do briefing regional
+                            Gerenciamento dos tópicos, seções e campos do briefing regional
                         </p>
                     </div>
                 </div>
@@ -363,14 +401,14 @@ export default function RegionalAdminDynamicForms() {
                 <div className="lg:col-span-4 flex flex-col gap-8">
                     <div className="card p-0 overflow-hidden flex flex-col">
                         <div className="px-6 py-5 border-b border-pm-secondary/10 bg-pm-light/30">
-                            <h3 className="section-title mb-0">1. Categorias Regionais</h3>
-                            <p className="text-[10px] font-bold text-pm-secondary/50 mt-1 uppercase tracking-tighter">Estrutura de Alto Nível</p>
+                            <h3 className="section-title mb-0">1. Nome do Tópico</h3>
+                            <p className="text-[10px] font-bold text-pm-secondary/50 mt-1 uppercase tracking-tighter">Tópicos do briefing regional</p>
                         </div>
 
                         <div className="p-6 bg-pm-light/20 border-b border-pm-secondary/10">
                             <div className="space-y-4">
                                 <div>
-                                    <label className="input-label">NOVA CATEGORIA</label>
+                                    <label className="input-label">NOVO TÓPICO</label>
                                     <input
                                         type="text"
                                         placeholder="Ex: Efetivo, Produtividade..."
@@ -384,7 +422,7 @@ export default function RegionalAdminDynamicForms() {
                                     disabled={!newCategoryTitle.trim()}
                                     className="btn btn-primary w-full h-12 mt-2"
                                 >
-                                    <Plus className="w-4 h-4" /> Preparar Categoria
+                                    <Plus className="w-4 h-4" /> Adicionar Tópico
                                 </button>
                             </div>
                         </div>
@@ -397,16 +435,16 @@ export default function RegionalAdminDynamicForms() {
                                             setSelectedCategory(category.title);
                                             setSelectedSection(null);
                                         }}
-                                        className={`w-full flex items-center gap-4 pl-12 pr-6 py-5 rounded-3xl transition-all border-2 text-left ${selectedCategory === category.title
+                                        className={`w-full flex items-center gap-4 pl-12 pr-14 py-5 rounded-3xl transition-all border-2 text-left ${selectedCategory === category.title
                                             ? 'bg-white border-pm-primary/40 shadow-premium-lg translate-x-1'
                                             : 'bg-transparent border-transparent hover:bg-pm-light/50 hover:border-pm-secondary/10'
                                             }`}
                                     >
                                         <div className="absolute left-3 top-1/2 -translate-y-1/2 flex flex-col opacity-0 group-hover:opacity-100 transition-all">
-                                            <button onClick={event => { event.stopPropagation(); moveCategory(category.title, 'up'); }} disabled={index === 0} className="p-1 text-pm-secondary hover:text-pm-primary transition-all disabled:opacity-10">
+                                            <button onClick={event => { event.stopPropagation(); moveCategory(category.id, 'up'); }} disabled={index === 0} className="p-1 text-pm-secondary hover:text-pm-primary transition-all disabled:opacity-10">
                                                 <ChevronUp className="w-4 h-4" />
                                             </button>
-                                            <button onClick={event => { event.stopPropagation(); moveCategory(category.title, 'down'); }} disabled={index === categories.length - 1} className="p-1 text-pm-secondary hover:text-pm-primary transition-all disabled:opacity-10">
+                                            <button onClick={event => { event.stopPropagation(); moveCategory(category.id, 'down'); }} disabled={index === categories.length - 1} className="p-1 text-pm-secondary hover:text-pm-primary transition-all disabled:opacity-10">
                                                 <ChevronDown className="w-4 h-4" />
                                             </button>
                                         </div>
@@ -425,10 +463,20 @@ export default function RegionalAdminDynamicForms() {
                                             </span>
                                         </div>
                                     </button>
+                                    <button
+                                        onClick={() => {
+                                            setEditingTopic(category);
+                                            setEditTopicTitle(category.title);
+                                        }}
+                                        className="absolute right-4 bottom-5 p-2 bg-white text-pm-secondary hover:bg-pm-primary hover:text-white rounded-xl transition-all shadow-sm border border-pm-secondary/10 opacity-0 group-hover:opacity-100"
+                                        title="Editar tópico"
+                                    >
+                                        <Edit2 className="w-4 h-4" />
+                                    </button>
                                 </div>
                             ))}
                             {categories.length === 0 && (
-                                <p className="text-sm text-pm-secondary italic text-center py-4">Nenhuma categoria regional cadastrada.</p>
+                                <p className="text-sm text-pm-secondary italic text-center py-4">Nenhum tópico regional cadastrado.</p>
                             )}
                         </div>
                     </div>
@@ -447,7 +495,7 @@ export default function RegionalAdminDynamicForms() {
                                     <div className="w-16 h-16 bg-pm-primary/5 rounded-full flex items-center justify-center mx-auto mb-4">
                                         <ArrowLeft className="w-8 h-8 text-pm-primary/30" />
                                     </div>
-                                    <p className="text-[10px] font-black text-pm-secondary/40 uppercase tracking-[0.2em]">Selecione uma categoria para prosseguir</p>
+                                    <p className="text-[10px] font-black text-pm-secondary/40 uppercase tracking-[0.2em]">Selecione um tópico para prosseguir</p>
                                 </div>
                             ) : (
                                 <div className="space-y-5">
@@ -534,7 +582,7 @@ export default function RegionalAdminDynamicForms() {
                                                 event.stopPropagation();
                                                 setEditingSection(section);
                                                 setEditSectionTitle(section.title);
-                                                setEditSectionCategory(section.categoryTitle);
+                                                setEditSectionTopicId(section.topicId ?? selectedTopic?.id ?? '');
                                                 setEditSectionMode(section.mode);
                                                 setEditSectionFrequency(section.updateFrequency);
                                             }} className={`p-2 rounded-xl transition-all ${selectedSectionData?.id === section.id ? 'bg-white/10 text-white hover:bg-white/20' : 'bg-white text-pm-secondary hover:text-pm-primary shadow-premium border border-pm-secondary/10'}`}>
@@ -626,6 +674,29 @@ export default function RegionalAdminDynamicForms() {
                 </div>
             </div>
 
+            {editingTopic && (
+                <div className="fixed inset-0 bg-pm-dark/60 backdrop-blur-md z-[55] flex items-center justify-center p-4">
+                    <div className="bg-white rounded-[2rem] shadow-premium-2xl w-full max-w-md p-8 border border-pm-secondary/10 animate-in fade-in zoom-in-95 duration-200">
+                        <div className="flex justify-between items-center mb-8">
+                            <div>
+                                <h3 className="text-xl font-black text-pm-dark uppercase tracking-tight">Editar Tópico</h3>
+                                <p className="text-[10px] font-bold text-pm-secondary/50 uppercase tracking-widest mt-1">Arquitetura Regional</p>
+                            </div>
+                            <button onClick={() => setEditingTopic(null)} className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-pm-light text-pm-secondary transition-all">
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+                        <div>
+                            <label className="input-label">NOME DO TÓPICO</label>
+                            <input value={editTopicTitle} onChange={event => setEditTopicTitle(event.target.value)} className="input-field h-14" />
+                        </div>
+                        <button onClick={updateTopic} disabled={!editTopicTitle.trim()} className="btn btn-primary w-full h-14 text-sm mt-8">
+                            <Save className="w-5 h-5" /> Salvar Tópico
+                        </button>
+                    </div>
+                </div>
+            )}
+
             {editingSection && (
                 <div className="fixed inset-0 bg-pm-dark/60 backdrop-blur-md z-[55] flex items-center justify-center p-4">
                     <div className="bg-white rounded-[2rem] shadow-premium-2xl w-full max-w-md p-8 border border-pm-secondary/10 animate-in fade-in zoom-in-95 duration-200">
@@ -644,8 +715,12 @@ export default function RegionalAdminDynamicForms() {
                                 <input value={editSectionTitle} onChange={event => setEditSectionTitle(event.target.value)} className="input-field h-14" />
                             </div>
                             <div>
-                                <label className="input-label">CATEGORIA</label>
-                                <input value={editSectionCategory} onChange={event => setEditSectionCategory(event.target.value)} className="input-field h-14" />
+                                <label className="input-label">TÓPICO</label>
+                                <select value={editSectionTopicId} onChange={event => setEditSectionTopicId(event.target.value)} className="input-field h-14">
+                                    {categories.map(topic => (
+                                        <option key={topic.id} value={topic.id}>{topic.title}</option>
+                                    ))}
+                                </select>
                             </div>
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 <div>
@@ -665,7 +740,7 @@ export default function RegionalAdminDynamicForms() {
                                 </div>
                             </div>
                         </div>
-                        <button onClick={updateSection} disabled={!editSectionTitle.trim() || !editSectionCategory.trim()} className="btn btn-primary w-full h-14 text-sm mt-8">
+                        <button onClick={updateSection} disabled={!editSectionTitle.trim() || !editSectionTopicId} className="btn btn-primary w-full h-14 text-sm mt-8">
                             <Save className="w-5 h-5" /> Salvar Alterações
                         </button>
                     </div>

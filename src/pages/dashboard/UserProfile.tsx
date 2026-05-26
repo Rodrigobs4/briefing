@@ -2,9 +2,10 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../../store/AuthContext';
 import { Shield, Lock, Mail, Save, User as UserIcon, Loader2, AlertCircle, Building2, Briefcase } from 'lucide-react';
 import { sortByTextPtBr } from '../../utils/textOrdering';
+import { isGeneralBriefingUnit } from '../../utils/generalBriefingUnits';
 
 export default function UserProfile() {
-    const { user, updateUserPassword, updateUserEmail, units } = useAuth();
+    const { user, updateUserPassword, updateUserEmail, units, regionalCommands } = useAuth();
 
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
@@ -94,7 +95,10 @@ export default function UserProfile() {
 
     // Obter dados vinculados para exibição
     const userUnitIds = (user?.unitIds && user.unitIds.length > 0) ? user.unitIds : (user?.unitId ? [user.unitId] : []);
-    const userUnits = sortByTextPtBr(units.filter(u => userUnitIds.includes(u.id)), unit => unit.name);
+    const userUnits = sortByTextPtBr(
+        units.filter(unit => userUnitIds.includes(unit.id) && isGeneralBriefingUnit(unit, regionalCommands)),
+        unit => unit.name
+    );
 
     return (
         <div className="max-w-4xl mx-auto space-y-6">

@@ -128,6 +128,7 @@ const getValueToneClass = (cell: ReactNode, columnIndex: number, rowLabel: React
     if (typeof rowLabel !== 'string') return 'text-slate-800';
 
     const label = rowLabel.toLowerCase();
+    const deficitMetric = ['déficit', 'deficit'].some(term => label.includes(term));
     const shouldHighlightBalance = ['saldo', 'resultado', 'variação', 'variacao', 'diferença', 'diferenca', 'superávit', 'superavit', 'déficit', 'deficit']
         .some(term => label.includes(term));
     if (!shouldHighlightBalance) return 'text-slate-800';
@@ -141,6 +142,7 @@ const getValueToneClass = (cell: ReactNode, columnIndex: number, rowLabel: React
     const numericValue = Number(normalized);
 
     if (!Number.isFinite(numericValue) || numericValue === 0) return 'text-slate-800';
+    if (deficitMetric) return numericValue > 0 ? 'text-red-700' : 'text-emerald-700';
     return numericValue > 0 ? 'text-emerald-700' : 'text-red-700';
 };
 
@@ -264,7 +266,7 @@ const CompactTable = ({
     financial?: boolean;
     narrative?: boolean;
 }) => (
-    <div className="report-table mb-5 overflow-hidden border border-slate-300 rounded-lg">
+    <div className="report-table report-table-keep-together mb-5 overflow-hidden border border-slate-300 rounded-lg">
         <table className={`w-full text-left border-collapse bg-white table-fixed report-table-${variant} ${financial ? 'report-table-financial' : ''} ${narrative ? 'report-table-narrative' : ''}`}>
             <thead>
                 <tr className="bg-slate-900 text-white">
@@ -875,6 +877,8 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                             return value;
                                         };
                                         const itemsToRender = [...unitCollections].sort((a, b) => {
+                                            const manualOrder = (a.orderIndex ?? 999) - (b.orderIndex ?? 999);
+                                            if (manualOrder !== 0) return manualOrder;
                                             if (group.collectionLayout === 'table' && collectionFields.length > 0) {
                                                 return String(getCollectionFieldValue(a.id, collectionFields[0])).localeCompare(
                                                     String(getCollectionFieldValue(b.id, collectionFields[0])),
@@ -995,15 +999,23 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                         page-break-before: avoid;
                     }
                     .report-collection-panel,
-                    .report-metric-panel {
-                        break-inside: auto !important;
-                        page-break-inside: auto !important;
+                    .report-metric-panel,
+                    .report-text-panel,
+                    .report-table-keep-together {
+                        break-inside: avoid-page !important;
+                        page-break-inside: avoid !important;
                     }
-                    .report-table,
-                    .report-table table,
-                    .report-table tbody {
-                        break-inside: auto !important;
-                        page-break-inside: auto !important;
+                    .report-table-keep-together {
+                        display: inline-block !important;
+                        vertical-align: top;
+                        width: 100%;
+                    }
+                    .report-table-keep-together table,
+                    .report-table-keep-together thead,
+                    .report-table-keep-together tbody,
+                    .report-table-keep-together tr {
+                        break-inside: avoid !important;
+                        page-break-inside: avoid !important;
                     }
                     .report-table {
                         overflow: visible !important;
@@ -1014,18 +1026,18 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                     .report-table table {
                         border: 1px solid #cbd5e1;
                     }
-                    .report-text-panel,
                     .report-text-content {
-                        break-inside: auto !important;
-                        page-break-inside: auto !important;
+                        break-inside: avoid !important;
+                        page-break-inside: avoid !important;
                     }
                     .report-font-large .report-collection-panel,
                     .report-font-large .report-metric-panel,
-                    .report-font-large .report-table,
-                    .report-font-large .report-table table,
-                    .report-font-large .report-table tbody {
-                        break-inside: auto;
-                        page-break-inside: auto;
+                    .report-font-large .report-text-panel,
+                    .report-font-large .report-table-keep-together,
+                    .report-font-large .report-table-keep-together table,
+                    .report-font-large .report-table-keep-together tbody {
+                        break-inside: avoid-page !important;
+                        page-break-inside: avoid !important;
                     }
                     .report-font-large .report-section-header,
                     .report-font-large .report-table tr {

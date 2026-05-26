@@ -31,6 +31,7 @@ import { getPublicUploadUrl } from '../../utils/storageUrls';
 import { supabase } from '../../lib/supabase';
 import { compareTextPtBr, sortByTextPtBr } from '../../utils/textOrdering';
 import { formatBrazilianNumber, formatBrazilianNumericInput, parseBrazilianNumber } from '../../utils/brazilianNumbers';
+import { isGeneralBriefingUnit } from '../../utils/generalBriefingUnits';
 
 type RegionalBriefingPdfProps = {
     regionName: string;
@@ -282,6 +283,7 @@ function RegionalBriefingPdfRenderer({ regionName, selectedUnits, selectedGroups
             if (group.mode === 'collection') {
                 collectionItems
                     .filter(item => item.unitId === group.unitId && item.dataGroupId === group.id && item.status !== 'archived')
+                    .sort((a, b) => (a.orderIndex ?? 999) - (b.orderIndex ?? 999) || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
                     .forEach(item => {
                         const values = getValuesForItem(item.id)
                             .map((fieldValue: any) => ({ value: fieldValue, field: fields.find(field => field.id === fieldValue.fieldId) }))
@@ -518,7 +520,7 @@ function RegionalBriefingPdfRenderer({ regionName, selectedUnits, selectedGroups
                                         if (group.mode === 'collection') {
                                             const items = collectionItems
                                                 .filter(item => item.unitId === unit.id && item.dataGroupId === group.id && item.status !== 'archived')
-                                                .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+                                                .sort((a, b) => (a.orderIndex ?? 999) - (b.orderIndex ?? 999) || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
                                             if (items.length === 0) return null;
 
@@ -847,9 +849,10 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
         regionalBriefingCollectionValues,
         refreshData
     } = useAuth();
+    const generalUnits = allUnits.filter(unit => isGeneralBriefingUnit(unit, regionalCommands));
     const visibleUnits = user?.role === 'editor'
-        ? allUnits.filter(unit => (user.unitIds && user.unitIds.length > 0 ? user.unitIds.includes(unit.id) : unit.id === user.unitId))
-        : allUnits;
+        ? generalUnits.filter(unit => (user.unitIds && user.unitIds.length > 0 ? user.unitIds.includes(unit.id) : unit.id === user.unitId))
+        : generalUnits;
     const activeRegionalCommands = regionalCommands
         .filter(command => command.isActive)
         .sort((a, b) => compareTextPtBr(a.name, b.name));
@@ -1690,7 +1693,7 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
                                 <div className="flex items-center justify-between gap-3 mb-3">
                                     <div>
                                         <p className="text-[10px] font-black uppercase tracking-[0.18em] text-pm-secondary">Menu de preenchimento</p>
-                                        <h4 className="text-sm font-black text-pm-dark">Escolha uma área para preencher</h4>
+                                        <h4 className="text-sm font-black text-pm-dark">Escolha um tópico para preencher</h4>
                                     </div>
                                     <span className="hidden sm:inline-flex text-[10px] font-black uppercase tracking-widest text-pm-secondary bg-pm-light rounded-full px-3 py-1">
                                         {selectedFillCategory || 'Todas'}

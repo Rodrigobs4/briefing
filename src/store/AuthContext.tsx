@@ -15,10 +15,12 @@ export interface Unit {
     id: string;
     name: string;
     order_index?: number;
+    unitType?: 'general_topic' | 'regional_command';
     description: string;
     regionName?: string | null;
     regionalAscom?: string | null;
     responsibleSector?: string | null;
+    responsibleUpdaterId?: string | null;
     reportCategoryTitle?: string | null;
     reportCategoryOrder?: number;
     createdAt: string;
@@ -70,6 +72,7 @@ export interface CollectionItem {
     id: string;
     unitId: string;
     dataGroupId: string;
+    orderIndex: number;
     createdBy: string;
     updatedBy: string;
     isFeatured: boolean;
@@ -106,8 +109,16 @@ export interface UnitRegionalCommand {
     isActive: boolean;
 }
 
+export interface RegionalBriefingTopic {
+    id: string;
+    name: string;
+    orderIndex: number;
+    isActive: boolean;
+}
+
 export interface RegionalBriefingSection {
     id: string;
+    topicId?: string | null;
     code: string;
     title: string;
     categoryTitle: string;
@@ -224,6 +235,7 @@ interface DatabaseContextType {
     collectionFieldValues: CollectionFieldValue[];
     regionalCommands: RegionalCommand[];
     unitRegionalCommands: UnitRegionalCommand[];
+    regionalBriefingTopics: RegionalBriefingTopic[];
     regionalBriefingSections: RegionalBriefingSection[];
     regionalBriefingFields: RegionalBriefingField[];
     regionalBriefingEntries: RegionalBriefingEntry[];
@@ -275,6 +287,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [collectionFieldValues, setCollectionFieldValues] = useState<CollectionFieldValue[]>([]);
     const [regionalCommands, setRegionalCommands] = useState<RegionalCommand[]>([]);
     const [unitRegionalCommands, setUnitRegionalCommands] = useState<UnitRegionalCommand[]>([]);
+    const [regionalBriefingTopics, setRegionalBriefingTopics] = useState<RegionalBriefingTopic[]>([]);
     const [regionalBriefingSections, setRegionalBriefingSections] = useState<RegionalBriefingSection[]>([]);
     const [regionalBriefingFields, setRegionalBriefingFields] = useState<RegionalBriefingField[]>([]);
     const [regionalBriefingEntries, setRegionalBriefingEntries] = useState<RegionalBriefingEntry[]>([]);
@@ -357,22 +370,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     const clearData = () => {
-        setUnits([]); setDataGroups([]); setFields([]); setEntries([]); setFieldValues([]); setCollectionItems([]); setCollectionFieldValues([]); setRegionalCommands([]); setUnitRegionalCommands([]); setRegionalBriefingSections([]); setRegionalBriefingFields([]); setRegionalBriefingEntries([]); setRegionalBriefingValues([]); setRegionalBriefingCollectionItems([]); setRegionalBriefingCollectionValues([]); setUsers([]); setNotifications([]);
+        setUnits([]); setDataGroups([]); setFields([]); setEntries([]); setFieldValues([]); setCollectionItems([]); setCollectionFieldValues([]); setRegionalCommands([]); setUnitRegionalCommands([]); setRegionalBriefingTopics([]); setRegionalBriefingSections([]); setRegionalBriefingFields([]); setRegionalBriefingEntries([]); setRegionalBriefingValues([]); setRegionalBriefingCollectionItems([]); setRegionalBriefingCollectionValues([]); setUsers([]); setNotifications([]);
     };
 
     const fetchAllData = async () => {
         console.time('fetchAllData');
         try {
-            const [u, dg, f, e, fv, ci, cfv, rc, urc, rbs, rbf, rbe, rbv, rbci, rbcv, p, n] = await Promise.all([
+            const [u, dg, f, e, fv, ci, cfv, rc, urc, rbt, rbs, rbf, rbe, rbv, rbci, rbcv, p, n] = await Promise.all([
                 supabase.from('units').select('*'),
                 supabase.from('data_groups').select('*').order('order_index', { ascending: true }),
                 supabase.from('fields').select('*').order('order_index', { ascending: true }),
                 supabase.from('data_group_entries').select('*'),
                 supabase.from('field_values').select('*'),
-                supabase.from('collection_items').select('*').order('created_at', { ascending: false }),
+                supabase.from('collection_items').select('*').order('order_index', { ascending: true }).order('created_at', { ascending: false }),
                 supabase.from('collection_field_values').select('*'),
                 supabase.from('regional_commands').select('*').order('order_index', { ascending: true }),
                 supabase.from('unit_regional_commands').select('*'),
+                supabase.from('regional_briefing_topics').select('*').order('order_index', { ascending: true }),
                 supabase.from('regional_briefing_sections').select('*').order('category_order', { ascending: true }).order('order_index', { ascending: true }),
                 supabase.from('regional_briefing_fields').select('*').order('order_index', { ascending: true }),
                 supabase.from('regional_briefing_entries').select('*'),
@@ -383,16 +397,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 supabase.from('notifications').select('*').order('created_at', { ascending: false })
             ]);
 
-            if (u.data) setUnits(u.data.map(d => ({ id: d.id, name: (d.full_name?.trim() || d.name), order_index: d.order_index ?? 999, description: d.description, regionName: d.region_name ?? null, regionalAscom: d.regional_ascom ?? null, responsibleSector: d.responsible_sector ?? null, reportCategoryTitle: d.report_category_title ?? null, reportCategoryOrder: d.report_category_order ?? 999, createdAt: d.created_at })));
+            if (u.data) setUnits(u.data.map(d => ({ id: d.id, name: (d.full_name?.trim() || d.name), order_index: d.order_index ?? 999, unitType: d.unit_type ?? 'general_topic', description: d.description, regionName: d.region_name ?? null, regionalAscom: d.regional_ascom ?? null, responsibleSector: d.responsible_sector ?? null, responsibleUpdaterId: d.responsible_updater_id ?? null, reportCategoryTitle: d.report_category_title ?? null, reportCategoryOrder: d.report_category_order ?? 999, createdAt: d.created_at })));
             if (dg.data) setDataGroups(dg.data.map(d => ({ id: d.id, unitId: d.unit_id, title: d.title, order: d.order_index, mode: d.mode as any, updateFrequency: d.update_frequency ?? 'fixed', showTotal: d.show_total ?? true, collectionLayout: d.collection_layout ?? 'narrative', reportLayout: d.report_layout ?? 'table', categoryTitle: d.category_title ?? null, categoryOrder: d.category_order ?? 999 })));
             if (f.data) setFields(f.data.map(d => ({ id: d.id, dataGroupId: d.data_group_id, name: d.name, type: d.type as FieldType, required: d.required, order: d.order_index, isActive: d.is_active, calculationConfig: d.calculation_config, enumOptions: Array.isArray(d.enum_options) ? d.enum_options.filter((option: unknown): option is string => typeof option === 'string' && option.trim().length > 0) : [] })));
             if (e.data) setEntries(e.data.map(d => ({ id: d.id, unitId: d.unit_id, dataGroupId: d.data_group_id, referenceYear: d.reference_year ?? null, updatedAt: d.updated_at, updatedBy: d.updated_by })));
             if (fv.data) setFieldValues(fv.data.map(d => ({ id: d.id, entryId: d.entry_id, fieldId: d.field_id, value: d.value })));
-            if (ci.data) setCollectionItems(ci.data.map(d => ({ id: d.id, unitId: d.unit_id, dataGroupId: d.data_group_id, createdBy: d.created_by, updatedBy: d.updated_by, isFeatured: d.is_featured, status: d.status, createdAt: d.created_at, updatedAt: d.updated_at })));
+            if (ci.data) setCollectionItems(ci.data.map(d => ({ id: d.id, unitId: d.unit_id, dataGroupId: d.data_group_id, orderIndex: d.order_index ?? 999, createdBy: d.created_by, updatedBy: d.updated_by, isFeatured: d.is_featured, status: d.status, createdAt: d.created_at, updatedAt: d.updated_at })));
             if (cfv.data) setCollectionFieldValues(cfv.data.map(d => ({ id: d.id, itemId: d.item_id, fieldId: d.field_id, valueText: d.value_text, valueNumber: d.value_number, valueJson: d.value_json, updatedAt: d.updated_at })));
             if (rc.data) setRegionalCommands(rc.data.map(d => ({ id: d.id, code: d.code, name: d.name, type: d.type, orderIndex: d.order_index ?? 999, isActive: d.is_active })));
             if (urc.data) setUnitRegionalCommands(urc.data.map(d => ({ id: d.id, unitId: d.unit_id, regionalCommandId: d.regional_command_id, startedAt: d.started_at, endedAt: d.ended_at ?? null, isActive: d.is_active })));
-            if (rbs.data) setRegionalBriefingSections(rbs.data.map(d => ({ id: d.id, code: d.code, title: d.title, categoryTitle: d.category_title, categoryOrder: d.category_order ?? 999, orderIndex: d.order_index ?? 999, mode: d.mode, sourceStrategy: d.source_strategy, updateFrequency: d.update_frequency ?? 'custom', isActive: d.is_active })));
+            if (rbt.data) setRegionalBriefingTopics(rbt.data.map(d => ({ id: d.id, name: d.name, orderIndex: d.order_index ?? 999, isActive: d.is_active })));
+            if (rbs.data) setRegionalBriefingSections(rbs.data.map(d => ({ id: d.id, topicId: d.topic_id ?? null, code: d.code, title: d.title, categoryTitle: d.category_title, categoryOrder: d.category_order ?? 999, orderIndex: d.order_index ?? 999, mode: d.mode, sourceStrategy: d.source_strategy, updateFrequency: d.update_frequency ?? 'custom', isActive: d.is_active })));
             if (rbf.data) setRegionalBriefingFields(rbf.data.map(d => ({ id: d.id, sectionId: d.section_id, code: d.code, label: d.label, fieldType: d.field_type, orderIndex: d.order_index ?? 999, isRequired: d.is_required, supportsComparison: d.supports_comparison, aggregationMethod: d.aggregation_method, calculationConfig: d.calculation_config, isActive: d.is_active })));
             if (rbe.data) setRegionalBriefingEntries(rbe.data.map(d => ({ id: d.id, regionalCommandId: d.regional_command_id, sectionId: d.section_id, referenceLabel: d.reference_label ?? null, referenceStartDate: d.reference_start_date ?? null, referenceEndDate: d.reference_end_date ?? null, referenceYear: d.reference_year ?? null, updatedBy: d.updated_by ?? null, updatedAt: d.updated_at })));
             if (rbv.data) setRegionalBriefingValues(rbv.data.map(d => ({ id: d.id, entryId: d.entry_id, fieldId: d.field_id, valueText: d.value_text, valueNumber: d.value_number, valueJson: d.value_json, updatedAt: d.updated_at })));
@@ -445,11 +460,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             id: u.id,
             name: u.name,
             order_index: u.order_index ?? 999,
+            unit_type: u.unitType ?? 'general_topic',
             description: u.description
         };
         if (u.regionName) payload.region_name = u.regionName;
         if (u.regionalAscom) payload.regional_ascom = u.regionalAscom;
         if (u.responsibleSector) payload.responsible_sector = u.responsibleSector;
+        if (u.responsibleUpdaterId) payload.responsible_updater_id = u.responsibleUpdaterId;
         if (u.reportCategoryTitle) payload.report_category_title = u.reportCategoryTitle;
         if (u.reportCategoryOrder !== undefined) payload.report_category_order = u.reportCategoryOrder;
 
@@ -461,10 +478,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const payload: any = {};
         if (updates.name !== undefined) payload.name = updates.name;
         if (updates.order_index !== undefined) payload.order_index = updates.order_index;
+        if (updates.unitType !== undefined) payload.unit_type = updates.unitType;
         if (updates.description !== undefined) payload.description = updates.description;
         if (updates.regionName !== undefined) payload.region_name = updates.regionName;
         if (updates.regionalAscom !== undefined) payload.regional_ascom = updates.regionalAscom;
         if (updates.responsibleSector !== undefined) payload.responsible_sector = updates.responsibleSector;
+        if (updates.responsibleUpdaterId !== undefined) payload.responsible_updater_id = updates.responsibleUpdaterId;
         if (updates.reportCategoryTitle !== undefined) payload.report_category_title = updates.reportCategoryTitle;
         if (updates.reportCategoryOrder !== undefined) payload.report_category_order = updates.reportCategoryOrder;
 
@@ -588,9 +607,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     const addCollectionItem = async (unitId: string, dataGroupId: string, userId: string, values: Record<string, any>) => {
+        const nextOrderIndex = collectionItems
+            .filter(item => item.unitId === unitId && item.dataGroupId === dataGroupId)
+            .reduce((highest, item) => Math.max(highest, item.orderIndex), 0) + 1;
         const { data: item, error: itemErr } = await supabase.from('collection_items').insert({
             unit_id: unitId,
             data_group_id: dataGroupId,
+            order_index: nextOrderIndex,
             created_by: userId,
             updated_by: userId
         }).select().single();
@@ -727,7 +750,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         <AuthContext.Provider value={{
             user, login, logout, isAuthenticated: !!user, sessionLoading,
             updateUserEmail, updateUserPassword,
-            units, dataGroups, fields, entries, fieldValues, collectionItems, collectionFieldValues, regionalCommands, unitRegionalCommands, regionalBriefingSections, regionalBriefingFields, regionalBriefingEntries, regionalBriefingValues, regionalBriefingCollectionItems, regionalBriefingCollectionValues, users, notifications,
+            units, dataGroups, fields, entries, fieldValues, collectionItems, collectionFieldValues, regionalCommands, unitRegionalCommands, regionalBriefingTopics, regionalBriefingSections, regionalBriefingFields, regionalBriefingEntries, regionalBriefingValues, regionalBriefingCollectionItems, regionalBriefingCollectionValues, users, notifications,
             refreshData: fetchAllData,
             addUnit, updateUnit, deleteUnit, addDataGroup, updateDataGroup, deleteDataGroup,
             addField, updateField, deleteField,

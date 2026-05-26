@@ -1,9 +1,10 @@
 import { useState, ChangeEvent, useEffect, useMemo } from 'react';
 import { useAuth, type DataGroup, calculateFieldValue } from '../../store/AuthContext';
-import { Save, UploadCloud, CheckCircle2, FileText, AlertCircle, X, Hash, Percent, Loader2, ChevronDown } from 'lucide-react';
+import { Save, UploadCloud, CheckCircle2, FileText, AlertCircle, X, Hash, Percent, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { STORAGE_BUCKET_UPLOADS } from '../../config/storage';
-import { sortByTextPtBr } from '../../utils/textOrdering';
+import { compareTextPtBr } from '../../utils/textOrdering';
+import { isGeneralBriefingUnit } from '../../utils/generalBriefingUnits';
 import { formatBrazilianNumber, formatBrazilianNumericInput, formatStoredNumericValue, parseBrazilianNumber } from '../../utils/brazilianNumbers';
 
 const FIRST_REPORT_YEAR = 2023;
@@ -11,18 +12,32 @@ const CURRENT_REPORT_YEAR = Math.max(FIRST_REPORT_YEAR, new Date().getFullYear()
 const REPORT_YEARS = Array.from({ length: CURRENT_REPORT_YEAR - FIRST_REPORT_YEAR + 1 }, (_, index) => CURRENT_REPORT_YEAR - index);
 
 export default function DynamicEditorPanel() {
-    const { user, units, dataGroups, fields, deleteCollectionItem, getValuesForItem } = useAuth();
+    const { user, units, regionalCommands, dataGroups, fields, deleteCollectionItem, getValuesForItem } = useAuth();
 
-    // Suporte a múltiplos tópicos
-    // Fallback: Se unitIds estiver vazio, tenta usar o unitId singular legado para compatibilidade
-    const userUnitIds = (user?.unitIds && user.unitIds.length > 0) ? user.unitIds : (user?.unitId ? [user.unitId] : []);
-    const userUnits = sortByTextPtBr(units.filter(u => userUnitIds.includes(u.id)), unit => unit.name);
+    // Tópicos e seções seguem a mesma sequência definida na arquitetura do briefing.
+    const userUnits = useMemo(() => {
+        const userUnitIds = (user?.unitIds && user.unitIds.length > 0)
+            ? user.unitIds
+            : (user?.unitId ? [user.unitId] : []);
+
+        return units
+            .filter(unit => userUnitIds.includes(unit.id) && isGeneralBriefingUnit(unit, regionalCommands))
+            .sort((left, right) =>
+                (left.order_index ?? 999) - (right.order_index ?? 999)
+                || compareTextPtBr(left.name, right.name)
+            );
+    }, [units, regionalCommands, user?.unitId, user?.unitIds]);
 
     // Estado para o tópico selecionado
     const [selectedUnitId, setSelectedUnitId] = useState<string | null>(userUnits[0]?.id || null);
     const userUnit = useMemo(() => units.find(u => u.id === selectedUnitId), [units, selectedUnitId]);
 
-    const myGroups = sortByTextPtBr(dataGroups.filter(g => g.unitId === selectedUnitId), group => group.title);
+    const myGroups = useMemo(() => dataGroups
+        .filter(group => group.unitId === selectedUnitId)
+        .sort((left, right) =>
+            left.order - right.order
+            || compareTextPtBr(left.title, right.title)
+        ), [dataGroups, selectedUnitId]);
 
     const [activeGroup, setActiveGroup] = useState<DataGroup | null>(myGroups[0] || null);
     const [formData, setFormData] = useState<Record<string, any>>({});
@@ -43,7 +58,23 @@ export default function DynamicEditorPanel() {
     const activeFields = fields.filter(f => f.dataGroupId === activeGroup?.id && f.isActive).sort((a, b) => a.order - b.order);
 
     useEffect(() => {
-        if (!activeGroup || !userUnit) return;
+        setSelectedUnitId(current =>
+            userUnits.some(unit => unit.id === current)
+                ? current
+                : userUnits[0]?.id ?? null
+        );
+    }, [userUnits]);
+
+    useEffect(() => {
+        setActiveGroup(current =>
+            myGroups.find(group => group.id === current?.id)
+            ?? myGroups[0]
+            ?? null
+        );
+    }, [myGroups]);
+
+    useEffect(() => {
+        if (!activeGroup || !userUnit || activeGroup.unitId !== userUnit.id) return;
 
         setIsCollectionListView(true);
         setEditingItemId(null);
@@ -132,6 +163,7 @@ export default function DynamicEditorPanel() {
                     .eq('unit_id', userUnit.id)
                     .eq('data_group_id', activeGroup.id)
                     .eq('status', 'published') // Assumindo status published
+                    .order('order_index', { ascending: true })
                     .order('created_at', { ascending: false });
 
                 if (error) throw error;
@@ -141,6 +173,7 @@ export default function DynamicEditorPanel() {
                     id: item.id,
                     unitId: item.unit_id,
                     dataGroupId: item.data_group_id,
+                    orderIndex: item.order_index ?? 999,
                     createdBy: item.created_by,
                     updatedBy: item.updated_by,
                     isFeatured: item.is_featured,
@@ -221,6 +254,31 @@ export default function DynamicEditorPanel() {
             setLocalCollectionItems(prev => prev.map(i => i.id === itemId ? { ...i, is_featured: !currentFeatured } : i));
         } catch (err: any) {
             console.error("Failed to toggle featured", err);
+        }
+    };
+
+    const moveCollectionItem = async (itemId: string, direction: 'up' | 'down') => {
+        const itemIndex = localCollectionItems.findIndex(item => item.id === itemId);
+        if (itemIndex < 0) return;
+
+        const targetIndex = direction === 'up' ? itemIndex - 1 : itemIndex + 1;
+        if (targetIndex < 0 || targetIndex >= localCollectionItems.length) return;
+
+        const currentItem = localCollectionItems[itemIndex];
+        const targetItem = localCollectionItems[targetIndex];
+        const reorderedItems = [...localCollectionItems];
+        reorderedItems[itemIndex] = { ...targetItem, orderIndex: currentItem.orderIndex };
+        reorderedItems[targetIndex] = { ...currentItem, orderIndex: targetItem.orderIndex };
+        setLocalCollectionItems(reorderedItems);
+
+        const [{ error: currentError }, { error: targetError }] = await Promise.all([
+            supabase.from('collection_items').update({ order_index: targetItem.orderIndex }).eq('id', currentItem.id),
+            supabase.from('collection_items').update({ order_index: currentItem.orderIndex }).eq('id', targetItem.id),
+        ]);
+
+        if (currentError || targetError) {
+            setLocalCollectionItems(localCollectionItems);
+            setErrorMess('Não foi possível alterar a ordem dos itens. Verifique se a migration de ordenação foi aplicada.');
         }
     };
 
@@ -491,6 +549,7 @@ export default function DynamicEditorPanel() {
                         .insert({
                             unit_id: userUnit.id,
                             data_group_id: activeGroup.id,
+                            order_index: localCollectionItems.reduce((highest, item) => Math.max(highest, item.orderIndex ?? 0), 0) + 1,
                             created_by: user.id,
                             updated_by: user.id,
                             status: 'published'
@@ -539,6 +598,7 @@ export default function DynamicEditorPanel() {
                         .eq('unit_id', userUnit.id)
                         .eq('data_group_id', activeGroup.id)
                         .eq('status', 'published')
+                        .order('order_index', { ascending: true })
                         .order('created_at', { ascending: false });
 
                     // Mapeia os dados do banco para o formato esperado
@@ -546,6 +606,7 @@ export default function DynamicEditorPanel() {
                         id: item.id,
                         unitId: item.unit_id,
                         dataGroupId: item.data_group_id,
+                        orderIndex: item.order_index ?? 999,
                         createdBy: item.created_by,
                         updatedBy: item.updated_by,
                         isFeatured: item.is_featured,
@@ -589,9 +650,9 @@ export default function DynamicEditorPanel() {
                     </div>
                 )}
 
-                <h3 className="font-bold text-pm-dark px-2 border-l-4 border-pm-primary">Conjuntos de Dados</h3>
+                <h3 className="font-bold text-pm-dark px-2 border-l-4 border-pm-primary">Seções na ordem do briefing</h3>
                 <div className="flex flex-col gap-2">
-                    {myGroups.map(group => (
+                    {myGroups.map((group, index) => (
                         <button
                             key={group.id}
                             onClick={() => { setActiveGroup(group); }}
@@ -601,9 +662,15 @@ export default function DynamicEditorPanel() {
                                     : 'bg-white border-pm-secondary/20 hover:border-pm-primary/40 text-pm-secondary hover:text-pm-dark'}`}
                         >
                             <div className="flex items-center gap-2 mb-1">
+                                <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-black ${activeGroup?.id === group.id ? 'bg-pm-dark/15 text-pm-dark' : 'bg-pm-light text-pm-secondary'}`}>
+                                    {index + 1}
+                                </span>
                                 <FileText className="w-4 h-4 flex-shrink-0" />
                                 <span className="truncate">{group.title}</span>
                             </div>
+                            <span className={`ml-7 text-[10px] font-black uppercase tracking-wider ${activeGroup?.id === group.id ? 'text-pm-dark/70' : 'text-pm-secondary/60'}`}>
+                                {group.mode === 'collection' ? 'Coleção' : 'Snapshot'}
+                            </span>
                         </button>
                     ))}
                 </div>
@@ -669,6 +736,7 @@ export default function DynamicEditorPanel() {
                                         <table className="w-full text-left text-sm text-pm-dark min-w-[600px]">
                                             <thead className="bg-pm-light border-b border-pm-secondary/20">
                                                 <tr>
+                                                    <th className="px-4 py-3 font-bold text-center w-20">Ordem</th>
                                                     <th className="px-4 py-3 font-bold">Data Criação</th>
                                                     <th className="px-4 py-3 font-bold">Resumo Val.(Auto)</th>
                                                     <th className="px-4 py-3 font-bold text-center">Destaque</th>
@@ -676,13 +744,35 @@ export default function DynamicEditorPanel() {
                                                 </tr>
                                             </thead>
                                             <tbody className="divide-y divide-pm-secondary/10">
-                                                {localCollectionItems.map(item => {
+                                                {localCollectionItems.map((item, itemIndex) => {
                                                     const fv = getValuesForItem(item.id);
                                                     const autoTitleFv = fv.find(v => v.valueText && v.valueText.length > 5);
                                                     const autoTitle = autoTitleFv?.valueText?.substring(0, 40) + '...' || 'Registro #' + item.id.substring(0, 6);
 
                                                     return (
                                                         <tr key={item.id} className="hover:bg-pm-light/30 transition-colors">
+                                                            <td className="px-2 py-3">
+                                                                <div className="flex items-center justify-center gap-1">
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => moveCollectionItem(item.id, 'up')}
+                                                                        disabled={itemIndex === 0}
+                                                                        title="Mover item para cima"
+                                                                        className="rounded p-1 text-pm-secondary hover:bg-pm-light hover:text-pm-primary disabled:cursor-not-allowed disabled:opacity-20"
+                                                                    >
+                                                                        <ChevronUp className="h-4 w-4" />
+                                                                    </button>
+                                                                    <button
+                                                                        type="button"
+                                                                        onClick={() => moveCollectionItem(item.id, 'down')}
+                                                                        disabled={itemIndex === localCollectionItems.length - 1}
+                                                                        title="Mover item para baixo"
+                                                                        className="rounded p-1 text-pm-secondary hover:bg-pm-light hover:text-pm-primary disabled:cursor-not-allowed disabled:opacity-20"
+                                                                    >
+                                                                        <ChevronDown className="h-4 w-4" />
+                                                                    </button>
+                                                                </div>
+                                                            </td>
                                                             <td className="px-4 py-3 text-pm-secondary">{new Date(item.createdAt).toLocaleDateString('pt-BR')}</td>
                                                             <td className="px-4 py-3 font-medium truncate max-w-[200px]">{autoTitle}</td>
                                                             <td className="px-4 py-3 text-center">

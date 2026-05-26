@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { lazy, Suspense, useState, useMemo, useEffect } from "react";
 import { useAuth, calculateFieldValue } from "../../store/AuthContext";
 import {
   Clock,
@@ -45,10 +45,50 @@ import {
   Bell,
   ClipboardPlus,
   Package,
+  Image as ImageIcon,
+  Search,
+  Sparkles,
+  TrendingUp,
 } from "lucide-react";
 import { getPublicUploadUrl } from "../../utils/storageUrls";
 import { sortByTextPtBr } from "../../utils/textOrdering";
 import { formatBrazilianNumber } from "../../utils/brazilianNumbers";
+import { isGeneralBriefingUnit } from "../../utils/generalBriefingUnits";
+
+const GeneralTrendChart = lazy(() =>
+  import("./components/DashboardCharts").then((module) => ({ default: module.GeneralTrendChart })),
+);
+const GeneralCompositionChart = lazy(() =>
+  import("./components/DashboardCharts").then((module) => ({ default: module.GeneralCompositionChart })),
+);
+const GeneralRankingChart = lazy(() =>
+  import("./components/DashboardCharts").then((module) => ({ default: module.GeneralRankingChart })),
+);
+
+const ChartFallback = () => <div className="h-full w-full animate-pulse rounded-2xl bg-pm-light/70" />;
+
+type DashboardTab = "overview" | "indicators" | "records" | "detail";
+
+const formatDashboardValue = (field: { type: string; value: unknown }) => {
+  const numericValue = Number(field.value);
+  if (!Number.isFinite(numericValue)) return String(field.value ?? "-");
+  if (field.type === "currency") return formatBrazilianNumber(numericValue, true);
+  if (field.type === "percentage") return `${numericValue.toLocaleString("pt-BR")}%`;
+  return numericValue.toLocaleString("pt-BR");
+};
+
+const getMetricColor = (label: string, value: unknown) => {
+  const normalizedLabel = label
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+  const numericValue = Number(value);
+
+  if (normalizedLabel.includes("deficit") && Number.isFinite(numericValue) && numericValue > 0) {
+    return "text-red-700";
+  }
+  return "text-pm-dark";
+};
 
 const TOPIC_ICONS = [
   { name: "database", icon: Database },
@@ -101,45 +141,6 @@ function getIconByName(name: string) {
   );
 }
 
-const normalizeRegionalKey = (value?: string | null) =>
-  (value || "")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[_\-\s]+/g, " ")
-    .trim()
-    .toLowerCase();
-
-const FALLBACK_REGIONAL_COMMAND_KEYS = new Set([
-  "cprms",
-  "atlantico",
-  "baia de todos os santos",
-  "central",
-  "norte",
-  "sul",
-  "leste",
-  "sudoeste",
-  "oeste",
-  "chapada",
-  "cpme",
-  "comando de operacoes especializadas",
-]);
-
-function isRegionalCommandAsUnit(
-  unit: { name: string },
-  regionalCommands: Array<{ code: string; name: string }>,
-) {
-  const unitName = normalizeRegionalKey(unit.name);
-  const commandKeys = new Set([
-    ...regionalCommands.flatMap((command) => [
-      normalizeRegionalKey(command.code),
-      normalizeRegionalKey(command.name),
-    ]),
-    ...FALLBACK_REGIONAL_COMMAND_KEYS,
-  ]);
-
-  return commandKeys.has(unitName);
-}
-
 const ImageRenderer = ({ path, alt }: { path: string; alt: string }) => {
   const url = getPublicUploadUrl(path);
 
@@ -169,9 +170,7 @@ export default function DashboardExecutivo() {
   const units = useMemo(
     () =>
       sortByTextPtBr(
-        allUnits.filter(
-          (unit) => !isRegionalCommandAsUnit(unit, regionalCommands),
-        ),
+        allUnits.filter((unit) => isGeneralBriefingUnit(unit, regionalCommands)),
         (unit) => unit.name,
       ),
     [allUnits, regionalCommands],
@@ -180,6 +179,9 @@ export default function DashboardExecutivo() {
   const [isInitialized, setIsInitialized] = useState(false);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [unitFilterSearch, setUnitFilterSearch] = useState("");
+  const [detailSearch, setDetailSearch] = useState("");
+  const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
+  const [focusedUnitId, setFocusedUnitId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!isInitialized && units.length > 0) {
@@ -236,6 +238,7 @@ export default function DashboardExecutivo() {
       lastUpdated: string | null;
       updatedBy: string | null;
       responsibleSector?: string | null;
+      responsibleUpdater?: string | null;
       groups: Array<{
         groupId: string;
         groupTitle: string;
@@ -292,6 +295,9 @@ export default function DashboardExecutivo() {
           latestUpdatedAt > 0 ? new Date(latestUpdatedAt).toISOString() : null,
         updatedBy: updatedByName,
         responsibleSector: unit.responsibleSector ?? null,
+        responsibleUpdater: unit.responsibleUpdaterId
+          ? users.find((candidate) => candidate.id === unit.responsibleUpdaterId)?.name || "Responsável configurado"
+          : null,
         groups: [] as any[],
       };
 
@@ -345,6 +351,7 @@ export default function DashboardExecutivo() {
 
               return {
                 id: item.id,
+                orderIndex: item.orderIndex,
                 author,
                 dateRaw: new Date(item.createdAt).getTime(),
                 dateStr: new Date(item.createdAt).toLocaleString("pt-BR"),
@@ -355,12 +362,10 @@ export default function DashboardExecutivo() {
               };
             });
 
-            processedItems.sort((a, b) =>
-              b.isFeatured === a.isFeatured
-                ? b.dateRaw - a.dateRaw
-                : a.isFeatured
-                  ? -1
-                  : 1,
+            processedItems.sort(
+              (a, b) =>
+                (a.orderIndex ?? 999) - (b.orderIndex ?? 999) ||
+                b.dateRaw - a.dateRaw,
             );
 
             unitView.groups.push({
@@ -510,10 +515,231 @@ export default function DashboardExecutivo() {
     };
   }, [selectedUnitIds, entries, collectionItems]);
 
+  const analytics = useMemo(() => {
+    const selectedEntries = entries.filter((entry) =>
+      selectedUnitIds.includes(entry.unitId),
+    );
+    const selectedItems = collectionItems.filter(
+      (item) =>
+        selectedUnitIds.includes(item.unitId) && item.status !== "archived",
+    );
+    const updates = [
+      ...selectedEntries.map((entry) => ({
+        date: entry.updatedAt,
+        type: "Indicadores",
+      })),
+      ...selectedItems.map((item) => ({
+        date: item.updatedAt,
+        type: "Registros",
+      })),
+    ].filter((item) => item.date);
+    const now = new Date();
+    const trend = Array.from({ length: 6 }, (_, index) => {
+      const date = new Date(now.getFullYear(), now.getMonth() - (5 - index), 1);
+      return {
+        key: `${date.getFullYear()}-${date.getMonth()}`,
+        label: date
+          .toLocaleDateString("pt-BR", { month: "short" })
+          .replace(".", ""),
+        indicadores: 0,
+        registros: 0,
+      };
+    });
+    updates.forEach((update) => {
+      const date = new Date(update.date);
+      const bucket = trend.find(
+        (item) => item.key === `${date.getFullYear()}-${date.getMonth()}`,
+      );
+      if (!bucket) return;
+      if (update.type === "Indicadores") bucket.indicadores += 1;
+      else bucket.registros += 1;
+    });
+
+    const unitsWithRecords = units
+      .filter((unit) => selectedUnitIds.includes(unit.id))
+      .map((unit) => {
+        const snapshots = selectedEntries.filter(
+          (entry) => entry.unitId === unit.id,
+        ).length;
+        const items = selectedItems.filter(
+          (item) => item.unitId === unit.id,
+        ).length;
+        return {
+          name: unit.name.length > 22 ? `${unit.name.slice(0, 20)}...` : unit.name,
+          fullName: unit.name,
+          indicadores: snapshots,
+          registros: items,
+          total: snapshots + items,
+        };
+      })
+      .filter((item) => item.total > 0)
+      .sort((a, b) => b.total - a.total);
+    const byUnit = unitsWithRecords.slice(0, 8);
+
+    const composition = [
+      { name: "Indicadores", value: selectedEntries.length, color: "#90846C" },
+      { name: "Registros", value: selectedItems.length, color: "#172433" },
+    ].filter((item) => item.value > 0);
+    const lastUpdate = updates
+      .map((item) => item.date)
+      .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0];
+    const activeUnitCount = unitsWithRecords.length;
+
+    const gallery = hierarchicalView
+      .flatMap((unit) =>
+        unit.groups.flatMap((group) =>
+          (group.collectionItems || [])
+            .filter((item: any) => item.imageUrl)
+            .map((item: any) => ({
+              ...item,
+              unitName: unit.unitName,
+              groupTitle: group.groupTitle,
+            })),
+        ),
+      )
+      .sort(
+        (a: any, b: any) =>
+          Number(b.isFeatured) - Number(a.isFeatured) || b.dateRaw - a.dateRaw,
+      )
+      .slice(0, 4);
+
+    return {
+      selectedEntries,
+      selectedItems,
+      trend,
+      byUnit,
+      composition,
+      gallery,
+      lastUpdate,
+      activeUnitCount,
+      coverage:
+        selectedUnitIds.length > 0
+          ? Math.round((activeUnitCount / selectedUnitIds.length) * 100)
+          : 0,
+    };
+  }, [collectionItems, entries, hierarchicalView, selectedUnitIds, units]);
+
+  const visibleHierarchy = useMemo(() => {
+    const search = detailSearch.trim().toLocaleLowerCase("pt-BR");
+    if (!search) return hierarchicalView;
+
+    return hierarchicalView
+      .map((unit) => ({
+        ...unit,
+        groups: unit.groups.filter(
+          (group) =>
+            unit.unitName.toLocaleLowerCase("pt-BR").includes(search) ||
+            group.groupTitle.toLocaleLowerCase("pt-BR").includes(search) ||
+            (group.numberFields || []).some(
+              (field: any) =>
+                field.label.toLocaleLowerCase("pt-BR").includes(search) ||
+                String(field.value).toLocaleLowerCase("pt-BR").includes(search),
+            ) ||
+            (group.textFields || []).some(
+              (field: any) =>
+                field.label.toLocaleLowerCase("pt-BR").includes(search) ||
+                String(field.value).toLocaleLowerCase("pt-BR").includes(search),
+            ) ||
+            (group.collectionItems || []).some(
+              (item: any) =>
+                item.title.toLocaleLowerCase("pt-BR").includes(search) ||
+                item.description.toLocaleLowerCase("pt-BR").includes(search),
+            ),
+        ),
+      }))
+      .filter((unit) => unit.groups.length > 0);
+  }, [detailSearch, hierarchicalView]);
+
+  const indicatorRows = useMemo(
+    () =>
+      visibleHierarchy.flatMap((unit) =>
+        unit.groups.flatMap((group) =>
+          group.mode === "snapshot"
+            ? (group.numberFields || []).map((field: any) => ({
+                ...field,
+                unitId: unit.unitId,
+                unitName: unit.unitName,
+                groupId: group.groupId,
+                groupTitle: group.groupTitle,
+                lastUpdated: unit.lastUpdated,
+                updatedBy: unit.updatedBy,
+                responsibleSector: unit.responsibleSector,
+                responsibleUpdater: unit.responsibleUpdater,
+              }))
+            : [],
+        ),
+      ),
+    [visibleHierarchy],
+  );
+
+  const textualRows = useMemo(
+    () =>
+      visibleHierarchy.flatMap((unit) =>
+        unit.groups.flatMap((group) =>
+          group.mode === "snapshot"
+            ? (group.textFields || []).map((field: any) => ({
+                ...field,
+                unitId: unit.unitId,
+                unitName: unit.unitName,
+                groupId: group.groupId,
+                groupTitle: group.groupTitle,
+                lastUpdated: unit.lastUpdated,
+                updatedBy: unit.updatedBy,
+                responsibleSector: unit.responsibleSector,
+                responsibleUpdater: unit.responsibleUpdater,
+              }))
+            : [],
+        ),
+      ),
+    [visibleHierarchy],
+  );
+
+  const recordRows = useMemo(
+    () =>
+      visibleHierarchy
+        .flatMap((unit) =>
+          unit.groups.flatMap((group) =>
+            group.mode === "collection"
+              ? (group.collectionItems || []).map((item: any) => ({
+                  ...item,
+                  unitId: unit.unitId,
+                  unitName: unit.unitName,
+                  groupId: group.groupId,
+                  groupTitle: group.groupTitle,
+                  responsibleSector: unit.responsibleSector,
+                  responsibleUpdater: unit.responsibleUpdater,
+                }))
+              : [],
+          ),
+        ),
+    [visibleHierarchy],
+  );
+
+  useEffect(() => {
+    if (visibleHierarchy.some((unit) => unit.unitId === focusedUnitId)) return;
+    setFocusedUnitId(visibleHierarchy[0]?.unitId ?? null);
+  }, [focusedUnitId, visibleHierarchy]);
+
+  const focusedUnit =
+    visibleHierarchy.find((unit) => unit.unitId === focusedUnitId) ||
+    visibleHierarchy[0] ||
+    null;
+
+  const dashboardTabs: Array<{
+    id: DashboardTab;
+    label: string;
+    count?: number;
+  }> = [
+    { id: "overview", label: "Visão geral" },
+    { id: "indicators", label: "Indicadores", count: indicatorRows.length + textualRows.length },
+    { id: "records", label: "Registros", count: recordRows.length },
+    { id: "detail", label: "Detalhe por tópico", count: visibleHierarchy.length },
+  ];
+
   return (
-    <div className="space-y-10">
+    <div className="space-y-8">
       {/* Filtro e impressão */}
-      <div className="bg-white p-5 rounded-2xl shadow-premium border border-pm-secondary/15 flex flex-wrap gap-4 items-center justify-between">
+      <div className="bg-white p-5 rounded-3xl shadow-premium border border-pm-secondary/15 flex flex-wrap gap-4 items-center justify-between">
         <div className="flex gap-3 flex-wrap items-center">
           <div className="flex flex-col">
             <span className="text-xs font-black text-pm-secondary/60 uppercase tracking-[0.15em]">
@@ -638,8 +864,48 @@ export default function DashboardExecutivo() {
             )}
           </div>
         </div>
+        <div className="relative w-full sm:w-[280px]">
+          <Search className="w-4 h-4 text-pm-secondary absolute left-3.5 top-1/2 -translate-y-1/2" />
+          <input
+            value={detailSearch}
+            onChange={(event) => setDetailSearch(event.target.value)}
+            placeholder="Buscar tópico ou seção"
+            className="w-full rounded-xl border border-pm-secondary/15 bg-pm-light/50 py-2.5 pl-10 pr-4 text-sm font-bold text-pm-dark outline-none focus:border-pm-primary/40 focus:ring-4 focus:ring-pm-primary/10"
+          />
+        </div>
       </div>
 
+      <nav className="flex flex-wrap gap-2 rounded-2xl border border-pm-secondary/15 bg-white p-2 shadow-sm">
+        {dashboardTabs.map((tab) => {
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-2 rounded-xl px-4 py-3 text-sm font-black transition-all ${
+                isActive
+                  ? "bg-pm-dark text-white shadow-md"
+                  : "text-pm-secondary hover:bg-pm-light hover:text-pm-dark"
+              }`}
+            >
+              {tab.label}
+              {tab.count !== undefined && (
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[10px] ${
+                    isActive ? "bg-white/15 text-white" : "bg-pm-light text-pm-secondary"
+                  }`}
+                >
+                  {tab.count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </nav>
+
+      {activeTab === "overview" && (
+        <>
       {/* 1. KPIs de Inteligência Executiva */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white p-6 rounded-3xl border border-pm-secondary/15 shadow-sm hover:shadow-premium transition-all flex items-center gap-5">
@@ -653,6 +919,9 @@ export default function DashboardExecutivo() {
             <h4 className="text-2xl font-black text-pm-dark leading-none">
               {estatisticasResumo.totalRegistros}
             </h4>
+            <p className="mt-2 text-[11px] font-bold text-pm-secondary">
+              {analytics.selectedEntries.length} indicadores + {analytics.selectedItems.length} registros
+            </p>
           </div>
         </div>
 
@@ -667,6 +936,9 @@ export default function DashboardExecutivo() {
             <h4 className="text-2xl font-black text-pm-dark leading-none">
               {estatisticasResumo.totalRelevantes}
             </h4>
+            <p className="mt-2 text-[11px] font-bold text-pm-secondary">
+              Priorizados para leitura
+            </p>
           </div>
         </div>
 
@@ -681,6 +953,9 @@ export default function DashboardExecutivo() {
             <h4 className="text-2xl font-black text-pm-dark leading-none">
               {estatisticasResumo.totalUnidades}
             </h4>
+            <p className="mt-2 text-[11px] font-bold text-pm-secondary">
+              {analytics.coverage}% com registros
+            </p>
           </div>
         </div>
 
@@ -692,25 +967,355 @@ export default function DashboardExecutivo() {
             <p className="text-[10px] font-black text-pm-secondary/50 uppercase tracking-widest leading-none mb-1">
               Status da Atividade
             </p>
-            <h4 className="text-2xl font-black text-pm-dark leading-none">
-              {estatisticasResumo.atividadeGlobal}
+            <h4 className="text-base font-black text-pm-dark leading-tight">
+              {analytics.lastUpdate
+                ? new Date(analytics.lastUpdate).toLocaleDateString("pt-BR")
+                : estatisticasResumo.atividadeGlobal}
             </h4>
+            <p className="mt-2 text-[11px] font-bold text-pm-secondary">
+              Última atualização
+            </p>
           </div>
         </div>
       </div>
 
-      {/* KPIs Hierarquicos */}
-      <div className="space-y-10">
-        {hierarchicalView.length === 0 && (
+      <div className="grid grid-cols-1 xl:grid-cols-[1.4fr_0.9fr] gap-5">
+        <section className="bg-white rounded-3xl border border-pm-secondary/15 shadow-premium overflow-hidden">
+          <div className="px-6 pt-6 pb-3 flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-pm-secondary">
+                Fluxo de atualização
+              </p>
+              <h3 className="mt-1 text-xl font-black text-pm-dark">
+                Evolução dos últimos 6 meses
+              </h3>
+            </div>
+            <span className="badge badge-success">
+              <TrendingUp className="w-3 h-3" />
+              Dados reais
+            </span>
+          </div>
+          <div className="h-[280px] px-3 pb-4">
+            <Suspense fallback={<ChartFallback />}>
+              <GeneralTrendChart data={analytics.trend} />
+            </Suspense>
+          </div>
+        </section>
+
+        <section className="bg-white rounded-3xl border border-pm-secondary/15 shadow-premium overflow-hidden">
+          <div className="px-6 pt-6">
+            <p className="text-[10px] font-black uppercase tracking-[0.18em] text-pm-secondary">
+              Composição
+            </p>
+            <h3 className="mt-1 text-xl font-black text-pm-dark">Base selecionada</h3>
+          </div>
+          <div className="h-[190px]">
+            <Suspense fallback={<ChartFallback />}>
+              <GeneralCompositionChart data={analytics.composition} />
+            </Suspense>
+          </div>
+          <div className="grid grid-cols-2 gap-2 px-5 pb-5">
+            {analytics.composition.map((item) => (
+              <div key={item.name} className="rounded-xl bg-pm-light/60 p-2.5 text-center">
+                <span className="mx-auto mb-1 block h-2 w-2 rounded-full" style={{ background: item.color }} />
+                <strong className="block text-lg text-pm-dark">{item.value}</strong>
+                <span className="block truncate text-[9px] font-black uppercase text-pm-secondary">{item.name}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[1.05fr_0.95fr] gap-5">
+        <section className="bg-white rounded-3xl border border-pm-secondary/15 shadow-premium p-6">
+          <div className="mb-5 flex items-center justify-between gap-4">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-pm-secondary">
+                Ranking operacional
+              </p>
+              <h3 className="mt-1 text-xl font-black text-pm-dark">Registros por tópico</h3>
+            </div>
+          </div>
+          {analytics.byUnit.length > 0 ? (
+            <div className="h-[300px]">
+              <Suspense fallback={<ChartFallback />}>
+                <GeneralRankingChart data={analytics.byUnit} />
+              </Suspense>
+            </div>
+          ) : (
+            <p className="py-16 text-center text-sm font-bold text-pm-secondary">Sem dados para os filtros atuais.</p>
+          )}
+        </section>
+
+        <section className="bg-white rounded-3xl border border-pm-secondary/15 shadow-premium overflow-hidden">
+          <div className="p-6 pb-4 flex items-center justify-between">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-pm-secondary">
+                Evidências visuais
+              </p>
+              <h3 className="mt-1 text-xl font-black text-pm-dark">Destaques recentes</h3>
+            </div>
+            <ImageIcon className="w-5 h-5 text-pm-primary" />
+          </div>
+          {analytics.gallery.length > 0 ? (
+            <div className="grid grid-cols-2 gap-3 px-5 pb-5">
+              {analytics.gallery.map((item: any) => (
+                <article key={item.id} className="group/card relative overflow-hidden rounded-2xl bg-pm-dark min-h-[138px]">
+                  <ImageRenderer path={item.imageUrl} alt={item.title} />
+                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/50 to-transparent px-3 pb-3 pt-12">
+                    {item.isFeatured && <span className="mb-1 inline-flex rounded-full bg-amber-400 px-2 py-0.5 text-[9px] font-black uppercase text-pm-dark">Destaque</span>}
+                    <p className="truncate text-xs font-black text-white">{item.title}</p>
+                    <p className="truncate text-[10px] font-bold text-white/70">{item.unitName}</p>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="m-5 mt-0 flex min-h-[300px] flex-col items-center justify-center rounded-2xl border border-dashed border-pm-secondary/20 bg-pm-light/40 text-center">
+              <Sparkles className="h-8 w-8 text-pm-primary/60" />
+              <p className="mt-3 text-sm font-black text-pm-dark">Nenhuma imagem registrada</p>
+              <p className="mt-1 max-w-[240px] text-xs font-bold text-pm-secondary">
+                Imagens inseridas nas coleções aparecerão aqui automaticamente.
+              </p>
+            </div>
+          )}
+        </section>
+      </div>
+        </>
+      )}
+
+      {activeTab === "indicators" && (
+        <section className="space-y-5">
+          <div className="flex flex-col gap-2 rounded-3xl border border-pm-secondary/15 bg-white p-6 shadow-sm sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-pm-secondary">
+                Valores gerados
+              </p>
+              <h3 className="mt-1 text-2xl font-black text-pm-dark">Indicadores consolidados</h3>
+              <p className="mt-2 text-sm font-medium text-pm-secondary">
+                Valores preenchidos nas seções das unidades selecionadas.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <span className="rounded-xl bg-pm-light px-4 py-2 text-sm font-black text-pm-dark">
+                {indicatorRows.length} valor(es)
+              </span>
+              <span className="rounded-xl bg-pm-light px-4 py-2 text-sm font-black text-pm-dark">
+                {textualRows.length} nota(s)
+              </span>
+            </div>
+          </div>
+
+          {indicatorRows.length === 0 && textualRows.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-pm-secondary/25 bg-white py-16 text-center text-sm font-bold text-pm-secondary">
+              Nenhum indicador encontrado para os filtros atuais.
+            </div>
+          ) : (
+            <>
+            {indicatorRows.length > 0 && (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {indicatorRows.map((field: any) => (
+                <article
+                  key={`${field.unitId}-${field.groupId}-${field.fieldId}`}
+                  className="rounded-2xl border border-pm-secondary/15 bg-white p-5 shadow-sm transition-all hover:border-pm-primary/30 hover:shadow-premium"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-[10px] font-black uppercase tracking-widest text-pm-secondary">
+                        {field.unitName}
+                      </p>
+                      <p className="mt-1 truncate text-xs font-bold text-pm-primary">
+                        {field.groupTitle}
+                      </p>
+                    </div>
+                    <Activity className="h-4 w-4 shrink-0 text-pm-primary/60" />
+                  </div>
+                  <p className="mt-5 text-xs font-black uppercase tracking-wide text-pm-secondary/75">
+                    {field.label}
+                  </p>
+                  <p className={`mt-2 text-3xl font-black tracking-tight ${getMetricColor(field.label, field.value)}`}>
+                    {formatDashboardValue(field)}
+                  </p>
+                  <div className="mt-4 space-y-1.5 border-t border-pm-secondary/10 pt-3 text-[10px] font-bold uppercase tracking-wide text-pm-secondary/70">
+                    {field.responsibleSector && (
+                      <p className="flex items-center gap-1.5">
+                        <Building2 className="h-3 w-3" />
+                        {field.responsibleSector}
+                      </p>
+                    )}
+                    {field.responsibleUpdater && (
+                      <p className="flex items-center gap-1.5">
+                        <UserRound className="h-3 w-3" />
+                        Responsável: {field.responsibleUpdater}
+                      </p>
+                    )}
+                    {field.lastUpdated && (
+                      <p className="flex items-center gap-1.5">
+                        <Clock className="h-3 w-3" />
+                        Última: {new Date(field.lastUpdated).toLocaleDateString("pt-BR")} por {field.updatedBy}
+                      </p>
+                    )}
+                  </div>
+                </article>
+              ))}
+            </div>
+            )}
+            {textualRows.length > 0 && (
+              <div className="space-y-3">
+                <h4 className="text-sm font-black uppercase tracking-wider text-pm-secondary">
+                  Informações qualitativas
+                </h4>
+                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                  {textualRows.map((field: any) => (
+                    <article
+                      key={`${field.unitId}-${field.groupId}-${field.fieldId}`}
+                      className="rounded-2xl border border-pm-secondary/15 bg-white p-5 shadow-sm"
+                    >
+                      <div className="flex flex-wrap items-center gap-2 text-[10px] font-black uppercase tracking-wide">
+                        <span className="rounded-lg bg-pm-light px-2 py-1 text-pm-secondary">{field.unitName}</span>
+                        <span className="text-pm-primary">{field.groupTitle}</span>
+                      </div>
+                      <p className="mt-4 text-xs font-black uppercase text-pm-secondary/75">{field.label}</p>
+                      <p className="mt-2 whitespace-pre-wrap text-sm font-medium leading-relaxed text-pm-dark">
+                        {field.value}
+                      </p>
+                      {(field.responsibleUpdater || field.responsibleSector) && (
+                        <p className="mt-4 border-t border-pm-secondary/10 pt-3 text-[10px] font-bold uppercase text-pm-secondary/75">
+                          {field.responsibleSector || "Setor não definido"}
+                          {field.responsibleUpdater ? ` · Responsável: ${field.responsibleUpdater}` : ""}
+                        </p>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              </div>
+            )}
+            </>
+          )}
+        </section>
+      )}
+
+      {activeTab === "records" && (
+        <section className="space-y-5">
+          <div className="flex flex-col gap-2 rounded-3xl border border-pm-secondary/15 bg-white p-6 shadow-sm sm:flex-row sm:items-end sm:justify-between">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.18em] text-pm-secondary">
+                Conteúdo registrado
+              </p>
+              <h3 className="mt-1 text-2xl font-black text-pm-dark">Registros e evidências</h3>
+              <p className="mt-2 text-sm font-medium text-pm-secondary">
+                Informações produzidas nas coleções, organizadas por relevância e data.
+              </p>
+            </div>
+            <span className="rounded-xl bg-pm-light px-4 py-2 text-sm font-black text-pm-dark">
+              {recordRows.length} registro(s)
+            </span>
+          </div>
+
+          {recordRows.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-pm-secondary/25 bg-white py-16 text-center text-sm font-bold text-pm-secondary">
+              Nenhum registro de coleção encontrado para os filtros atuais.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+              {recordRows.map((item: any) => (
+                <article
+                  key={`${item.unitId}-${item.groupId}-${item.id}`}
+                  className={`overflow-hidden rounded-2xl border bg-white shadow-sm ${
+                    item.isFeatured ? "border-amber-300" : "border-pm-secondary/15"
+                  }`}
+                >
+                  {item.imageUrl && (
+                    <div className="group/card h-48 w-full bg-pm-light">
+                      <ImageRenderer path={item.imageUrl} alt={item.title} />
+                    </div>
+                  )}
+                  <div className="p-5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-lg bg-pm-light px-2 py-1 text-[10px] font-black uppercase text-pm-secondary">
+                        {item.unitName}
+                      </span>
+                      <span className="text-[10px] font-bold uppercase text-pm-primary">
+                        {item.groupTitle}
+                      </span>
+                      {item.isFeatured && (
+                        <span className="rounded-full bg-amber-100 px-2 py-1 text-[10px] font-black uppercase text-amber-700">
+                          Relevante
+                        </span>
+                      )}
+                    </div>
+                    <h4 className="mt-4 text-xl font-black text-pm-dark">{item.title}</h4>
+                    {item.description && (
+                      <p className="mt-2 line-clamp-4 text-sm font-medium leading-relaxed text-pm-secondary">
+                        {item.description}
+                      </p>
+                    )}
+                    {(item.responsibleUpdater || item.responsibleSector) && (
+                      <p className="mt-4 text-[10px] font-black uppercase tracking-wide text-pm-secondary/75">
+                        {item.responsibleSector || "Setor não definido"}
+                        {item.responsibleUpdater ? ` · Responsável: ${item.responsibleUpdater}` : ""}
+                      </p>
+                    )}
+                    <p className="mt-5 flex items-center gap-2 border-t border-pm-secondary/10 pt-4 text-[10px] font-black uppercase tracking-wide text-pm-secondary/75">
+                      <Clock className="h-3.5 w-3.5 text-pm-primary" />
+                      {item.dateStr} · {item.author}
+                    </p>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {activeTab === "detail" && (
+      <div className="space-y-8">
+        <div className="flex flex-col gap-1 border-b border-pm-secondary/15 pb-4">
+          <p className="text-[10px] font-black uppercase tracking-[0.18em] text-pm-secondary">
+            Detalhamento
+          </p>
+          <h3 className="text-2xl font-black text-pm-dark">Análise do tópico selecionado</h3>
+          <p className="text-sm font-medium text-pm-secondary">
+            Selecione um tópico para consultar suas seções sem percorrer todas as unidades.
+          </p>
+        </div>
+        {visibleHierarchy.length === 0 && (
           <div className="py-12 text-center bg-pm-light/50 border border-dashed border-pm-secondary/30 rounded-xl">
             <Activity className="w-8 h-8 text-pm-secondary mx-auto mb-2 opacity-50" />
             <p className="text-pm-secondary font-medium">
-              Nenhum indicador numérico preenchido pelas unidades ainda.
+              Nenhum tópico encontrado para os filtros atuais.
             </p>
           </div>
         )}
 
-        {hierarchicalView.map((unitNode) => (
+        {visibleHierarchy.length > 0 && (
+          <div className="flex gap-3 overflow-x-auto pb-2">
+            {visibleHierarchy.map((unitNode) => (
+              <button
+                key={unitNode.unitId}
+                type="button"
+                onClick={() => setFocusedUnitId(unitNode.unitId)}
+                className={`min-w-[220px] rounded-2xl border p-4 text-left transition-all ${
+                  focusedUnit?.unitId === unitNode.unitId
+                    ? "border-pm-primary bg-pm-primary/10 shadow-sm"
+                    : "border-pm-secondary/15 bg-white hover:border-pm-primary/35"
+                }`}
+              >
+                <p className="truncate text-sm font-black text-pm-dark">{unitNode.unitName}</p>
+                <p className="mt-2 text-[10px] font-bold uppercase tracking-wide text-pm-secondary">
+                  {unitNode.groups.length} seção(ões)
+                </p>
+                {unitNode.responsibleUpdater && (
+                  <p className="mt-1 truncate text-[10px] font-bold uppercase tracking-wide text-pm-primary">
+                    {unitNode.responsibleUpdater}
+                  </p>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {(focusedUnit ? [focusedUnit] : []).map((unitNode) => (
           <div key={unitNode.unitId} className="flex flex-col gap-8 relative">
             {/* Nível 1: Unidade (Cabeçalho) */}
             <div className="border-b-2 border-pm-primary/20 pb-4">
@@ -742,6 +1347,13 @@ export default function DashboardExecutivo() {
                   <span className="text-pm-dark/80">
                     {unitNode.responsibleSector}
                   </span>
+                </p>
+              )}
+              {unitNode.responsibleUpdater && (
+                <p className="text-[11px] text-pm-secondary font-bold flex items-center gap-2 mt-2 ml-16 uppercase tracking-wider">
+                  <UserRound className="w-3.5 h-3.5 text-pm-primary/60" />
+                  <span>Responsável pela atualização:</span>
+                  <span className="text-pm-dark/80">{unitNode.responsibleUpdater}</span>
                 </p>
               )}
             </div>
@@ -974,6 +1586,7 @@ export default function DashboardExecutivo() {
           </div>
         ))}
       </div>
+      )}
     </div>
   );
 }

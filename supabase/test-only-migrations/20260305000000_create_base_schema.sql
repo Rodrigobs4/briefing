@@ -18,8 +18,10 @@ CREATE TABLE IF NOT EXISTS public.units (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     name text NOT NULL,
     order_index integer NOT NULL DEFAULT 999,
+    unit_type text NOT NULL DEFAULT 'general_topic' CHECK (unit_type IN ('general_topic', 'regional_command')),
     description text NOT NULL DEFAULT 'building-2',
     responsible_sector text,
+    responsible_updater_id uuid,
     created_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now())
 );
 
@@ -31,6 +33,23 @@ CREATE TABLE IF NOT EXISTS public.profiles (
     created_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now()),
     updated_at timestamptz NOT NULL DEFAULT timezone('utc'::text, now())
 );
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'units_responsible_updater_id_fkey'
+          AND conrelid = 'public.units'::regclass
+    ) THEN
+        ALTER TABLE public.units
+        ADD CONSTRAINT units_responsible_updater_id_fkey
+        FOREIGN KEY (responsible_updater_id)
+        REFERENCES public.profiles(id)
+        ON DELETE SET NULL;
+    END IF;
+END;
+$$;
 
 CREATE TABLE IF NOT EXISTS public.profile_units (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -145,6 +164,12 @@ CREATE TABLE IF NOT EXISTS public.global_report_table_highlights (
 
 CREATE INDEX IF NOT EXISTS idx_units_order
 ON public.units (order_index, name);
+
+CREATE INDEX IF NOT EXISTS idx_units_type_order
+ON public.units (unit_type, order_index, name);
+
+CREATE INDEX IF NOT EXISTS idx_units_responsible_updater
+ON public.units (responsible_updater_id);
 
 CREATE INDEX IF NOT EXISTS idx_profile_units_profile
 ON public.profile_units (profile_id);
