@@ -904,14 +904,15 @@ export default function AdminDynamicForms() {
                                                 className="input-field"
                                             >
                                                 <option value="fixed">Cadastro fixo / sem comparativo</option>
+                                                <option value="monthly">Comparativo mensal</option>
                                                 <option value="yearly">Comparativo anual (2023 em diante)</option>
                                             </select>
                                             <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
-                                                Use anual quando o ano for o período do lançamento, e não um atributo.
+                                                Use mensal ou anual quando o período fizer parte do lançamento, e não for um atributo.
                                             </p>
                                         </div>
                                     )}
-                                    {newGroupMode === 'snapshot' && newGroupReportLayout === 'table' && newGroupUpdateFrequency === 'yearly' && (
+                                    {newGroupMode === 'snapshot' && newGroupReportLayout === 'table' && newGroupUpdateFrequency !== 'fixed' && (
                                         <div>
                                             <label className="input-label">TOTAL NO RELATÓRIO</label>
                                             <select
@@ -923,7 +924,7 @@ export default function AdminDynamicForms() {
                                                 <option value="hide">Ocultar total</option>
                                             </select>
                                             <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
-                                                Aplicado à coluna total do comparativo anual.
+                                                Aplicado à coluna total do comparativo selecionado.
                                             </p>
                                         </div>
                                     )}
@@ -1006,6 +1007,11 @@ export default function AdminDynamicForms() {
                                                 {g.mode === 'snapshot' && g.updateFrequency === 'yearly' && (
                                                     <span className={`text-[9px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full border ${selectedGroup === g.id ? 'bg-white/20 border-white/30 text-white' : 'bg-pm-primary/10 border-pm-primary/20 text-pm-primary'}`}>
                                                         Anual
+                                                    </span>
+                                                )}
+                                                {g.mode === 'snapshot' && g.updateFrequency === 'monthly' && (
+                                                    <span className={`text-[9px] font-black uppercase tracking-widest px-2.5 py-1 rounded-full border ${selectedGroup === g.id ? 'bg-white/20 border-white/30 text-white' : 'bg-pm-primary/10 border-pm-primary/20 text-pm-primary'}`}>
+                                                        Mensal
                                                     </span>
                                                 )}
                                                 {g.mode === 'snapshot' && g.reportLayout === 'text' && (
@@ -1578,11 +1584,12 @@ export default function AdminDynamicForms() {
                                         className="input-field h-14"
                                     >
                                         <option value="fixed">Cadastro fixo / sem comparativo</option>
+                                        <option value="monthly">Comparativo mensal</option>
                                         <option value="yearly">Comparativo anual (2023 em diante)</option>
                                     </select>
                                 </div>
                             )}
-                            {editingGroup.mode === 'snapshot' && editGroupReportLayout === 'table' && editGroupUpdateFrequency === 'yearly' && (
+                            {editingGroup.mode === 'snapshot' && editGroupReportLayout === 'table' && editGroupUpdateFrequency !== 'fixed' && (
                                 <div>
                                     <label className="input-label">TOTAL NO RELATÓRIO</label>
                                     <select

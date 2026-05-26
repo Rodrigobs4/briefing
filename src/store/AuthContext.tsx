@@ -7,7 +7,7 @@ export type Role = 'admin' | 'editor' | 'commander';
 export type FieldType = 'text' | 'textarea' | 'enum' | 'number' | 'currency' | 'percentage' | 'image' | 'calculated';
 
 export type CalculationOperation = 'sum' | 'subtract';
-export type DataGroupUpdateFrequency = 'fixed' | 'yearly';
+export type DataGroupUpdateFrequency = 'fixed' | 'monthly' | 'yearly';
 export type DataGroupCollectionLayout = 'narrative' | 'table';
 export type DataGroupReportLayout = 'table' | 'text';
 
@@ -57,6 +57,7 @@ export interface DataGroupEntry {
     unitId: string;
     dataGroupId: string;
     referenceYear?: number | null;
+    referenceMonth?: number | null;
     updatedAt: string;
     updatedBy: string;
 }
@@ -256,8 +257,8 @@ interface DatabaseContextType {
     updateField: (id: string, updates: Partial<Field>) => Promise<void>;
     deleteField: (id: string, softDelete: boolean) => Promise<void>;
 
-    upsertDataGroupEntry: (unitId: string, dataGroupId: string, userId: string, values: Record<string, any>, referenceYear?: number | null) => Promise<void>;
-    getEntryForGroup: (unitId: string, dataGroupId: string, referenceYear?: number | null) => DataGroupEntry | undefined;
+    upsertDataGroupEntry: (unitId: string, dataGroupId: string, userId: string, values: Record<string, any>, referenceYear?: number | null, referenceMonth?: number | null) => Promise<void>;
+    getEntryForGroup: (unitId: string, dataGroupId: string, referenceYear?: number | null, referenceMonth?: number | null) => DataGroupEntry | undefined;
     getValuesForEntry: (entryId: string) => FieldValue[];
     getLatestFieldValue: (fieldId: string) => { value: any, updatedAt: string, updatedBy: string } | undefined;
 
@@ -400,7 +401,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (u.data) setUnits(u.data.map(d => ({ id: d.id, name: (d.full_name?.trim() || d.name), order_index: d.order_index ?? 999, unitType: d.unit_type ?? 'general_topic', description: d.description, regionName: d.region_name ?? null, regionalAscom: d.regional_ascom ?? null, responsibleSector: d.responsible_sector ?? null, responsibleUpdaterId: d.responsible_updater_id ?? null, reportCategoryTitle: d.report_category_title ?? null, reportCategoryOrder: d.report_category_order ?? 999, createdAt: d.created_at })));
             if (dg.data) setDataGroups(dg.data.map(d => ({ id: d.id, unitId: d.unit_id, title: d.title, order: d.order_index, mode: d.mode as any, updateFrequency: d.update_frequency ?? 'fixed', showTotal: d.show_total ?? true, collectionLayout: d.collection_layout ?? 'narrative', reportLayout: d.report_layout ?? 'table', categoryTitle: d.category_title ?? null, categoryOrder: d.category_order ?? 999 })));
             if (f.data) setFields(f.data.map(d => ({ id: d.id, dataGroupId: d.data_group_id, name: d.name, type: d.type as FieldType, required: d.required, order: d.order_index, isActive: d.is_active, calculationConfig: d.calculation_config, enumOptions: Array.isArray(d.enum_options) ? d.enum_options.filter((option: unknown): option is string => typeof option === 'string' && option.trim().length > 0) : [] })));
-            if (e.data) setEntries(e.data.map(d => ({ id: d.id, unitId: d.unit_id, dataGroupId: d.data_group_id, referenceYear: d.reference_year ?? null, updatedAt: d.updated_at, updatedBy: d.updated_by })));
+            if (e.data) setEntries(e.data.map(d => ({ id: d.id, unitId: d.unit_id, dataGroupId: d.data_group_id, referenceYear: d.reference_year ?? null, referenceMonth: d.reference_month ?? null, updatedAt: d.updated_at, updatedBy: d.updated_by })));
             if (fv.data) setFieldValues(fv.data.map(d => ({ id: d.id, entryId: d.entry_id, fieldId: d.field_id, value: d.value })));
             if (ci.data) setCollectionItems(ci.data.map(d => ({ id: d.id, unitId: d.unit_id, dataGroupId: d.data_group_id, orderIndex: d.order_index ?? 999, createdBy: d.created_by, updatedBy: d.updated_by, isFeatured: d.is_featured, status: d.status, createdAt: d.created_at, updatedAt: d.updated_at })));
             if (cfv.data) setCollectionFieldValues(cfv.data.map(d => ({ id: d.id, itemId: d.item_id, fieldId: d.field_id, valueText: d.value_text, valueNumber: d.value_number, valueJson: d.value_json, updatedAt: d.updated_at })));
@@ -567,15 +568,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await fetchAllData();
     };
 
-    const upsertDataGroupEntry = async (unitId: string, dataGroupId: string, userId: string, values: Record<string, any>, referenceYear: number | null = null) => {
+    const upsertDataGroupEntry = async (unitId: string, dataGroupId: string, userId: string, values: Record<string, any>, referenceYear: number | null = null, referenceMonth: number | null = null) => {
         let entryQuery = supabase
             .from('data_group_entries')
             .select('id')
             .eq('unit_id', unitId)
             .eq('data_group_id', dataGroupId);
         entryQuery = referenceYear === null
-            ? entryQuery.is('reference_year', null)
+            ? entryQuery.is('reference_year', null).is('reference_month', null)
             : entryQuery.eq('reference_year', referenceYear);
+        entryQuery = referenceMonth === null
+            ? entryQuery.is('reference_month', null)
+            : entryQuery.eq('reference_month', referenceMonth);
         const { data: existingEntry, error: lookupError } = await entryQuery.maybeSingle();
         if (lookupError) throw lookupError;
 
@@ -583,6 +587,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             unit_id: unitId,
             data_group_id: dataGroupId,
             reference_year: referenceYear,
+            reference_month: referenceMonth,
             updated_by: userId,
             updated_at: new Date().toISOString()
         };
@@ -670,8 +675,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         await fetchAllData();
     };
 
-    const getEntryForGroup = (unitId: string, dataGroupId: string, referenceYear: number | null = null) => {
-        return entries.find(e => e.unitId === unitId && e.dataGroupId === dataGroupId && (e.referenceYear ?? null) === referenceYear);
+    const getEntryForGroup = (unitId: string, dataGroupId: string, referenceYear: number | null = null, referenceMonth: number | null = null) => {
+        return entries.find(e => e.unitId === unitId && e.dataGroupId === dataGroupId && (e.referenceYear ?? null) === referenceYear && (e.referenceMonth ?? null) === referenceMonth);
     };
 
     const getValuesForEntry = (entryId: string) => {

@@ -383,6 +383,7 @@ export default function DashboardExecutivo() {
             .sort(
               (a, b) =>
                 (b.referenceYear ?? -1) - (a.referenceYear ?? -1) ||
+                (b.referenceMonth ?? -1) - (a.referenceMonth ?? -1) ||
                 new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
             )[0];
           if (entry) {
