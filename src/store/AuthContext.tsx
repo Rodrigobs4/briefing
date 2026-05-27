@@ -20,6 +20,7 @@ export interface Unit {
     regionName?: string | null;
     regionalAscom?: string | null;
     responsibleSector?: string | null;
+    responsibleSectorId?: string | null;
     responsibleUpdaterId?: string | null;
     reportCategoryTitle?: string | null;
     reportCategoryOrder?: number;
@@ -67,6 +68,7 @@ export interface FieldValue {
     entryId: string;
     fieldId: string;
     value: any;
+    updatedAt: string;
 }
 
 export interface CollectionItem {
@@ -208,6 +210,25 @@ export interface Notification {
     createdBy: string;
 }
 
+export interface ResponsibleSector {
+    id: string;
+    name: string;
+    isActive: boolean;
+}
+
+export interface UnitUpdateAlertRule {
+    id: string;
+    unitId: string;
+    startsAt: string;
+    dueAt?: string | null;
+    weekdays: number[];
+    deadlineTime: string;
+    scheduleTimezone: string;
+    isActive: boolean;
+    createdAt: string;
+    updatedAt: string;
+}
+
 export interface User {
     id: string;
     name: string;
@@ -245,6 +266,8 @@ interface DatabaseContextType {
     regionalBriefingCollectionValues: RegionalBriefingCollectionValue[];
     users: User[];
     notifications: Notification[];
+    responsibleSectors: ResponsibleSector[];
+    unitUpdateAlertRules: UnitUpdateAlertRule[];
     refreshData: () => Promise<void>;
 
     addUnit: (unit: Unit) => Promise<void>;
@@ -297,6 +320,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [regionalBriefingCollectionValues, setRegionalBriefingCollectionValues] = useState<RegionalBriefingCollectionValue[]>([]);
     const [users, setUsers] = useState<User[]>([]);
     const [notifications, setNotifications] = useState<Notification[]>([]);
+    const [responsibleSectors, setResponsibleSectors] = useState<ResponsibleSector[]>([]);
+    const [unitUpdateAlertRules, setUnitUpdateAlertRules] = useState<UnitUpdateAlertRule[]>([]);
 
     useEffect(() => {
         supabase.auth.getSession().then(({ data: { session } }) => {
@@ -346,7 +371,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 setUser({
                     id: data.id,
                     name: data.name,
-                    email: authEmail || '',
+                    email: data.email || authEmail || '',
                     role: data.role as Role,
                     unitId: unitIds[0] || data.unit_id || undefined,
                     unitIds,
@@ -371,13 +396,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     const clearData = () => {
-        setUnits([]); setDataGroups([]); setFields([]); setEntries([]); setFieldValues([]); setCollectionItems([]); setCollectionFieldValues([]); setRegionalCommands([]); setUnitRegionalCommands([]); setRegionalBriefingTopics([]); setRegionalBriefingSections([]); setRegionalBriefingFields([]); setRegionalBriefingEntries([]); setRegionalBriefingValues([]); setRegionalBriefingCollectionItems([]); setRegionalBriefingCollectionValues([]); setUsers([]); setNotifications([]);
+        setUnits([]); setDataGroups([]); setFields([]); setEntries([]); setFieldValues([]); setCollectionItems([]); setCollectionFieldValues([]); setRegionalCommands([]); setUnitRegionalCommands([]); setRegionalBriefingTopics([]); setRegionalBriefingSections([]); setRegionalBriefingFields([]); setRegionalBriefingEntries([]); setRegionalBriefingValues([]); setRegionalBriefingCollectionItems([]); setRegionalBriefingCollectionValues([]); setUsers([]); setNotifications([]); setResponsibleSectors([]); setUnitUpdateAlertRules([]);
     };
 
     const fetchAllData = async () => {
         console.time('fetchAllData');
         try {
-            const [u, dg, f, e, fv, ci, cfv, rc, urc, rbt, rbs, rbf, rbe, rbv, rbci, rbcv, p, n] = await Promise.all([
+            const [u, dg, f, e, fv, ci, cfv, rc, urc, rbt, rbs, rbf, rbe, rbv, rbci, rbcv, p, n, rs, uar] = await Promise.all([
                 supabase.from('units').select('*'),
                 supabase.from('data_groups').select('*').order('order_index', { ascending: true }),
                 supabase.from('fields').select('*').order('order_index', { ascending: true }),
@@ -395,14 +420,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 supabase.from('regional_briefing_collection_items').select('*').order('created_at', { ascending: false }),
                 supabase.from('regional_briefing_collection_values').select('*'),
                 supabase.from('profiles').select('*'),
-                supabase.from('notifications').select('*').order('created_at', { ascending: false })
+                supabase.from('notifications').select('*').order('created_at', { ascending: false }),
+                supabase.from('responsible_sectors').select('*').order('name', { ascending: true }),
+                supabase.from('unit_update_alert_rules').select('*').order('updated_at', { ascending: false })
             ]);
 
-            if (u.data) setUnits(u.data.map(d => ({ id: d.id, name: (d.full_name?.trim() || d.name), order_index: d.order_index ?? 999, unitType: d.unit_type ?? 'general_topic', description: d.description, regionName: d.region_name ?? null, regionalAscom: d.regional_ascom ?? null, responsibleSector: d.responsible_sector ?? null, responsibleUpdaterId: d.responsible_updater_id ?? null, reportCategoryTitle: d.report_category_title ?? null, reportCategoryOrder: d.report_category_order ?? 999, createdAt: d.created_at })));
+            if (u.data) setUnits(u.data.map(d => ({ id: d.id, name: (d.full_name?.trim() || d.name), order_index: d.order_index ?? 999, unitType: d.unit_type ?? 'general_topic', description: d.description, regionName: d.region_name ?? null, regionalAscom: d.regional_ascom ?? null, responsibleSector: d.responsible_sector ?? null, responsibleSectorId: d.responsible_sector_id ?? null, responsibleUpdaterId: d.responsible_updater_id ?? null, reportCategoryTitle: d.report_category_title ?? null, reportCategoryOrder: d.report_category_order ?? 999, createdAt: d.created_at })));
             if (dg.data) setDataGroups(dg.data.map(d => ({ id: d.id, unitId: d.unit_id, title: d.title, order: d.order_index, mode: d.mode as any, updateFrequency: d.update_frequency ?? 'fixed', showTotal: d.show_total ?? true, collectionLayout: d.collection_layout ?? 'narrative', reportLayout: d.report_layout ?? 'table', categoryTitle: d.category_title ?? null, categoryOrder: d.category_order ?? 999 })));
             if (f.data) setFields(f.data.map(d => ({ id: d.id, dataGroupId: d.data_group_id, name: d.name, type: d.type as FieldType, required: d.required, order: d.order_index, isActive: d.is_active, calculationConfig: d.calculation_config, enumOptions: Array.isArray(d.enum_options) ? d.enum_options.filter((option: unknown): option is string => typeof option === 'string' && option.trim().length > 0) : [] })));
             if (e.data) setEntries(e.data.map(d => ({ id: d.id, unitId: d.unit_id, dataGroupId: d.data_group_id, referenceYear: d.reference_year ?? null, referenceMonth: d.reference_month ?? null, updatedAt: d.updated_at, updatedBy: d.updated_by })));
-            if (fv.data) setFieldValues(fv.data.map(d => ({ id: d.id, entryId: d.entry_id, fieldId: d.field_id, value: d.value })));
+            if (fv.data) setFieldValues(fv.data.map(d => ({ id: d.id, entryId: d.entry_id, fieldId: d.field_id, value: d.value, updatedAt: d.updated_at })));
             if (ci.data) setCollectionItems(ci.data.map(d => ({ id: d.id, unitId: d.unit_id, dataGroupId: d.data_group_id, orderIndex: d.order_index ?? 999, createdBy: d.created_by, updatedBy: d.updated_by, isFeatured: d.is_featured, status: d.status, createdAt: d.created_at, updatedAt: d.updated_at })));
             if (cfv.data) setCollectionFieldValues(cfv.data.map(d => ({ id: d.id, itemId: d.item_id, fieldId: d.field_id, valueText: d.value_text, valueNumber: d.value_number, valueJson: d.value_json, updatedAt: d.updated_at })));
             if (rc.data) setRegionalCommands(rc.data.map(d => ({ id: d.id, code: d.code, name: d.name, type: d.type, orderIndex: d.order_index ?? 999, isActive: d.is_active })));
@@ -414,7 +441,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (rbv.data) setRegionalBriefingValues(rbv.data.map(d => ({ id: d.id, entryId: d.entry_id, fieldId: d.field_id, valueText: d.value_text, valueNumber: d.value_number, valueJson: d.value_json, updatedAt: d.updated_at })));
             if (rbci.data) setRegionalBriefingCollectionItems(rbci.data.map(d => ({ id: d.id, regionalCommandId: d.regional_command_id, sectionId: d.section_id, referenceLabel: d.reference_label ?? null, referenceStartDate: d.reference_start_date ?? null, referenceEndDate: d.reference_end_date ?? null, referenceYear: d.reference_year ?? null, status: d.status, createdBy: d.created_by ?? null, updatedBy: d.updated_by ?? null, createdAt: d.created_at, updatedAt: d.updated_at })));
             if (rbcv.data) setRegionalBriefingCollectionValues(rbcv.data.map(d => ({ id: d.id, itemId: d.item_id, fieldId: d.field_id, valueText: d.value_text, valueNumber: d.value_number, valueJson: d.value_json, updatedAt: d.updated_at })));
-            if (p.data) setUsers(p.data.map(d => ({ id: d.id, name: d.name, email: 'Protegido por Regras Internas', role: d.role as Role, unitId: d.unit_id, isActive: d.is_active })));
+            if (p.data) setUsers(p.data.map(d => ({ id: d.id, name: d.name, email: d.email || d.name || 'E-mail não cadastrado', role: d.role as Role, unitId: d.unit_id, isActive: d.is_active })));
             if (n.data) setNotifications(n.data.map(d => ({
                 id: d.id,
                 title: d.title,
@@ -424,6 +451,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 isActive: d.is_active,
                 createdAt: d.created_at,
                 createdBy: d.created_by
+            })));
+            if (rs.data) setResponsibleSectors(rs.data.map(d => ({ id: d.id, name: d.name, isActive: d.is_active })));
+            if (uar.data) setUnitUpdateAlertRules(uar.data.map(d => ({
+                id: d.id,
+                unitId: d.unit_id,
+                startsAt: d.starts_at,
+                dueAt: d.due_at ?? null,
+                weekdays: Array.isArray(d.weekdays) ? d.weekdays : [5],
+                deadlineTime: d.deadline_time ?? '18:00:00',
+                scheduleTimezone: d.schedule_timezone ?? 'America/Maceio',
+                isActive: d.is_active,
+                createdAt: d.created_at,
+                updatedAt: d.updated_at
             })));
         } catch (error) {
             console.error("Erro ao carregar dados do banco:", error);
@@ -467,6 +507,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (u.regionName) payload.region_name = u.regionName;
         if (u.regionalAscom) payload.regional_ascom = u.regionalAscom;
         if (u.responsibleSector) payload.responsible_sector = u.responsibleSector;
+        if (u.responsibleSectorId) payload.responsible_sector_id = u.responsibleSectorId;
         if (u.responsibleUpdaterId) payload.responsible_updater_id = u.responsibleUpdaterId;
         if (u.reportCategoryTitle) payload.report_category_title = u.reportCategoryTitle;
         if (u.reportCategoryOrder !== undefined) payload.report_category_order = u.reportCategoryOrder;
@@ -484,6 +525,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (updates.regionName !== undefined) payload.region_name = updates.regionName;
         if (updates.regionalAscom !== undefined) payload.regional_ascom = updates.regionalAscom;
         if (updates.responsibleSector !== undefined) payload.responsible_sector = updates.responsibleSector;
+        if (updates.responsibleSectorId !== undefined) payload.responsible_sector_id = updates.responsibleSectorId;
         if (updates.responsibleUpdaterId !== undefined) payload.responsible_updater_id = updates.responsibleUpdaterId;
         if (updates.reportCategoryTitle !== undefined) payload.report_category_title = updates.reportCategoryTitle;
         if (updates.reportCategoryOrder !== undefined) payload.report_category_order = updates.reportCategoryOrder;
@@ -755,7 +797,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         <AuthContext.Provider value={{
             user, login, logout, isAuthenticated: !!user, sessionLoading,
             updateUserEmail, updateUserPassword,
-            units, dataGroups, fields, entries, fieldValues, collectionItems, collectionFieldValues, regionalCommands, unitRegionalCommands, regionalBriefingTopics, regionalBriefingSections, regionalBriefingFields, regionalBriefingEntries, regionalBriefingValues, regionalBriefingCollectionItems, regionalBriefingCollectionValues, users, notifications,
+            units, dataGroups, fields, entries, fieldValues, collectionItems, collectionFieldValues, regionalCommands, unitRegionalCommands, regionalBriefingTopics, regionalBriefingSections, regionalBriefingFields, regionalBriefingEntries, regionalBriefingValues, regionalBriefingCollectionItems, regionalBriefingCollectionValues, users, notifications, responsibleSectors, unitUpdateAlertRules,
             refreshData: fetchAllData,
             addUnit, updateUnit, deleteUnit, addDataGroup, updateDataGroup, deleteDataGroup,
             addField, updateField, deleteField,
