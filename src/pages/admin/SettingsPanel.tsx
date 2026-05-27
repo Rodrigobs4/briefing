@@ -5,7 +5,7 @@ import {
     Shield, Settings2, Bell, Database, Lock, Upload, Image as ImageIcon,
     Eye, EyeOff, RefreshCw, AlertTriangle, ChevronRight,
     BarChart2, Percent, Hash, Save, Check, X, Calculator,
-    Plus, Trash2, Send, Info, AlertCircle, CheckCircle2
+    Plus, Trash2, Send, Info, AlertCircle, CheckCircle2, CalendarDays, UserRound
 } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 import { getPublicUploadUrl } from '../../utils/storageUrls';
@@ -14,6 +14,26 @@ import { compareTextPtBr, sortByTextPtBr } from '../../utils/textOrdering';
 import { isGeneralBriefingUnit } from '../../utils/generalBriefingUnits';
 
 type Tab = 'general' | 'security' | 'notifications' | 'indicators';
+
+type AlertRuleDraft = {
+    unitId: string;
+    unitName: string;
+    sectorId: string;
+    updaterId: string;
+    weekdays: number[];
+    deadlineTime: string;
+    isActive: boolean;
+};
+
+const WEEKDAYS = [
+    { value: 1, label: 'Seg' },
+    { value: 2, label: 'Ter' },
+    { value: 3, label: 'Qua' },
+    { value: 4, label: 'Qui' },
+    { value: 5, label: 'Sex' },
+    { value: 6, label: 'Sáb' },
+    { value: 0, label: 'Dom' }
+];
 
 const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
     { id: 'general', label: 'Parâmetros Gerais', icon: Settings2 },
@@ -469,10 +489,12 @@ function TabSecurity() {
 
 // ─── Notificações ─────────────────────────────────────────────────────────────
 function TabNotifications() {
-    const { notifications, addNotification, updateNotification, deleteNotification, units, regionalCommands } = useAuth();
+    const { notifications, addNotification, updateNotification, deleteNotification, units, regionalCommands, users, responsibleSectors, unitUpdateAlertRules, refreshData, user } = useAuth();
     const { settings, updateSettings } = useSettings();
     const briefingUnits = units.filter(unit => isGeneralBriefingUnit(unit, regionalCommands));
-    const briefingUnitIds = new Set(briefingUnits.map(unit => unit.id));
+    const updaterOptions = users
+        .filter(candidate => candidate.isActive !== false)
+        .sort((left, right) => compareTextPtBr(left.email || left.name, right.email || right.name));
     
     const [isCreating, setIsCreating] = useState(false);
     const [newTitle, setNewTitle] = useState('');
@@ -480,13 +502,14 @@ function TabNotifications() {
     const [newType, setNewType] = useState<'info' | 'warning' | 'success' | 'error'>('info');
     const [newRole, setNewRole] = useState<'all' | 'admin' | 'editor' | 'commander'>('all');
 
-    // Estados para SMTP e Prazos
+    // Estados para SMTP e regras de cobrança
     const [smtpServer, setSmtpServer] = useState('');
     const [smtpPort, setSmtpPort] = useState(587);
     const [smtpUser, setSmtpUser] = useState('');
     const [smtpPass, setSmtpPass] = useState('');
     const [smtpFrom, setSmtpFrom] = useState('');
-    const [deadlines, setDeadlines] = useState<any[]>([]);
+    const [newSectorName, setNewSectorName] = useState('');
+    const [alertRuleDrafts, setAlertRuleDrafts] = useState<AlertRuleDraft[]>([]);
     const [isSaving, setIsSaving] = useState(false);
 
     useEffect(() => {
@@ -496,18 +519,23 @@ function TabNotifications() {
             setSmtpUser(settings.smtp_user || '');
             setSmtpPass(settings.smtp_pass || '');
             setSmtpFrom(settings.smtp_from || 'noreply@pmba.gov.br');
-            
-            // Garantir que temos deadlines para todas as unidades se estiver vazio
-            if (settings.notification_deadlines && settings.notification_deadlines.length > 0) {
-                setDeadlines(sortByTextPtBr(
-                    settings.notification_deadlines.filter((deadline: { id: string }) => briefingUnitIds.has(deadline.id)),
-                    deadline => deadline.unit
-                ));
-            } else {
-                setDeadlines(sortByTextPtBr(briefingUnits, unit => unit.name).map(u => ({ id: u.id, unit: u.name, day: 'Sexta-feira', hour: '18:00' })));
-            }
         }
-    }, [settings, units, regionalCommands]);
+    }, [settings]);
+
+    useEffect(() => {
+        setAlertRuleDrafts(sortByTextPtBr(briefingUnits, unit => unit.name).map(unit => {
+            const rule = unitUpdateAlertRules.find(candidate => candidate.unitId === unit.id);
+            return {
+                unitId: unit.id,
+                unitName: unit.name,
+                sectorId: unit.responsibleSectorId || '',
+                updaterId: unit.responsibleUpdaterId || '',
+                weekdays: rule?.weekdays?.length ? rule.weekdays : [5],
+                deadlineTime: rule?.deadlineTime?.slice(0, 5) || '18:00',
+                isActive: rule?.isActive ?? false
+            };
+        }));
+    }, [units, regionalCommands, unitUpdateAlertRules]);
 
     const handleCreate = async () => {
         if (!newTitle || !newContent) return;
@@ -531,20 +559,72 @@ function TabNotifications() {
                 smtp_port: smtpPort,
                 smtp_user: smtpUser,
                 smtp_pass: smtpPass,
-                smtp_from: smtpFrom,
-                notification_deadlines: deadlines
+                smtp_from: smtpFrom
             });
-            alert('Configurações de notificação salvas com sucesso!');
+
+            for (const draft of alertRuleDrafts) {
+                const sector = responsibleSectors.find(option => option.id === draft.sectorId);
+                const { error: unitError } = await supabase.from('units').update({
+                    responsible_sector_id: sector?.id ?? null,
+                    responsible_sector: sector?.name ?? null,
+                    responsible_updater_id: draft.updaterId || null
+                }).eq('id', draft.unitId);
+                if (unitError) throw unitError;
+
+                const existingRule = unitUpdateAlertRules.find(rule => rule.unitId === draft.unitId);
+                if (draft.weekdays.length === 0) {
+                    throw new Error(`Selecione pelo menos um dia de atualização para "${draft.unitName}".`);
+                }
+
+                const { error } = await supabase.from('unit_update_alert_rules').upsert({
+                    unit_id: draft.unitId,
+                    starts_at: existingRule?.startsAt || new Date().toISOString(),
+                    due_at: null,
+                    weekdays: [...draft.weekdays].sort((left, right) => left - right),
+                    deadline_time: draft.deadlineTime,
+                    schedule_timezone: 'America/Maceio',
+                    is_active: draft.isActive,
+                    created_by: existingRule ? undefined : user?.id,
+                    updated_by: user?.id
+                }, { onConflict: 'unit_id' });
+                if (error) throw error;
+            }
+
+            await refreshData();
+            alert('Configurações e regras de alerta salvas com sucesso!');
         } catch (error) {
             console.error(error);
-            alert('Erro ao salvar configurações.');
+            alert(`Erro ao salvar configurações. ${error instanceof Error ? error.message : ''}`);
         } finally {
             setIsSaving(false);
         }
     };
 
-    const handleUpdateDeadline = (unitId: string, field: 'day' | 'hour', value: string) => {
-        setDeadlines(prev => prev.map(d => d.id === unitId ? { ...d, [field]: value } : d));
+    const handleUpdateAlertDraft = <K extends keyof AlertRuleDraft>(unitId: string, field: K, value: AlertRuleDraft[K]) => {
+        setAlertRuleDrafts(previous => previous.map(draft => draft.unitId === unitId ? { ...draft, [field]: value } : draft));
+    };
+
+    const handleToggleAlertWeekday = (unitId: string, weekday: number) => {
+        setAlertRuleDrafts(previous => previous.map(draft => {
+            if (draft.unitId !== unitId) return draft;
+            return {
+                ...draft,
+                weekdays: draft.weekdays.includes(weekday)
+                    ? draft.weekdays.filter(day => day !== weekday)
+                    : [...draft.weekdays, weekday]
+            };
+        }));
+    };
+
+    const handleAddSector = async () => {
+        if (!newSectorName.trim()) return;
+        const { error } = await supabase.from('responsible_sectors').insert({ name: newSectorName.trim() });
+        if (error) {
+            alert(`Não foi possível cadastrar o setor. ${error.message}`);
+            return;
+        }
+        setNewSectorName('');
+        await refreshData();
     };
 
     const sendTestEmail = async () => {
@@ -760,31 +840,131 @@ function TabNotifications() {
                 </button>
             </div>
 
-            {/* Prazos por Unidade */}
+            {/* Setores responsáveis */}
             <div className="bg-white p-6 rounded-xl shadow-sm border border-pm-secondary/20">
-                <h3 className="font-bold text-pm-dark border-b border-pm-secondary/10 pb-3 mb-4">Prazos de Entrega por Unidade</h3>
-                <p className="text-xs text-pm-secondary mb-4">Define quando cada unidade deve ter seus dados atualizados. Após o prazo, alertas são enviados automaticamente.</p>
-                <div className="space-y-3">
-                    {sortByTextPtBr(deadlines, deadline => deadline.unit).map(d => (
-                        <div key={d.id} className="flex items-center gap-3 p-3 rounded-lg border border-pm-secondary/10 bg-pm-light/30">
-                            <span className="text-sm font-bold text-pm-dark w-24 truncate">{d.unit}</span>
-                            <select 
-                                value={d.day} 
-                                onChange={e => handleUpdateDeadline(d.id, 'day', e.target.value)}
-                                className="flex-1 border border-pm-secondary/30 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-pm-primary outline-none bg-white font-bold"
-                            >
-                                {['Segunda-feira', 'Terça-feira', 'Quarta-feira', 'Quinta-feira', 'Sexta-feira', 'Sábado', 'Domingo'].map(day => (
-                                    <option key={day} value={day}>{day}</option>
-                                ))}
-                            </select>
-                            <input 
-                                type="time" 
-                                value={d.hour}
-                                onChange={e => handleUpdateDeadline(d.id, 'hour', e.target.value)}
-                                className="border border-pm-secondary/30 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:ring-pm-primary outline-none font-bold" 
-                            />
+                <h3 className="font-bold text-pm-dark border-b border-pm-secondary/10 pb-3 mb-4">Setores Responsáveis</h3>
+                <p className="text-xs text-pm-secondary mb-4">Cadastre os setores que poderão ser vinculados aos tópicos monitorados.</p>
+                <div className="flex flex-col sm:flex-row gap-3">
+                    <input
+                        value={newSectorName}
+                        onChange={event => setNewSectorName(event.target.value)}
+                        placeholder="Ex.: DOP, DCS, Coordenação de Saúde"
+                        className="flex-1 border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none"
+                    />
+                    <button
+                        type="button"
+                        onClick={handleAddSector}
+                        disabled={!newSectorName.trim()}
+                        className="px-4 py-2 rounded-lg text-sm font-bold bg-pm-primary text-white disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                        <Plus className="w-4 h-4" /> Cadastrar setor
+                    </button>
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                    {responsibleSectors.filter(sector => sector.isActive).map(sector => (
+                        <span key={sector.id} className="rounded-full border border-pm-primary/15 bg-pm-primary/5 px-3 py-1 text-xs font-bold text-pm-primary">
+                            {sector.name}
+                        </span>
+                    ))}
+                    {responsibleSectors.length === 0 && (
+                        <p className="text-xs italic text-pm-secondary">Nenhum setor cadastrado.</p>
+                    )}
+                </div>
+            </div>
+
+            {/* Regras de atualização por tópico */}
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-pm-secondary/20">
+                <h3 className="font-bold text-pm-dark border-b border-pm-secondary/10 pb-3 mb-4">Alertas de Atualização por Tópico</h3>
+                <p className="text-xs text-pm-secondary mb-5">
+                    Escolha um ou mais dias da semana. A cobrança se repete automaticamente e somente conta quando houver valor atualizado em uma seção ou coleção.
+                </p>
+                <div className="space-y-4">
+                    {alertRuleDrafts.map(draft => (
+                        <div key={draft.unitId} className="rounded-xl border border-pm-secondary/15 bg-pm-light/25 p-4">
+                            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                                <h4 className="text-sm font-black uppercase text-pm-dark">{draft.unitName}</h4>
+                                <label className="inline-flex items-center gap-2 text-xs font-bold text-pm-secondary">
+                                    <input
+                                        type="checkbox"
+                                        checked={draft.isActive}
+                                        onChange={event => handleUpdateAlertDraft(draft.unitId, 'isActive', event.target.checked)}
+                                        className="h-4 w-4 rounded text-pm-primary"
+                                    />
+                                    Monitorar tópico
+                                </label>
+                            </div>
+                            <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+                                <div>
+                                    <label className="block text-[10px] font-black uppercase tracking-wider text-pm-secondary mb-1">Setor responsável</label>
+                                    <select
+                                        value={draft.sectorId}
+                                        onChange={event => handleUpdateAlertDraft(draft.unitId, 'sectorId', event.target.value)}
+                                        className="w-full border border-pm-secondary/30 rounded-lg px-3 py-2 text-sm bg-white outline-none focus:ring-2 focus:ring-pm-primary"
+                                    >
+                                        <option value="">Não definido</option>
+                                        {responsibleSectors.filter(sector => sector.isActive).map(sector => (
+                                            <option key={sector.id} value={sector.id}>{sector.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="block text-[10px] font-black uppercase tracking-wider text-pm-secondary mb-1">Usuário atualizador</label>
+                                    <select
+                                        value={draft.updaterId}
+                                        onChange={event => handleUpdateAlertDraft(draft.unitId, 'updaterId', event.target.value)}
+                                        className="w-full border border-pm-secondary/30 rounded-lg px-3 py-2 text-sm bg-white outline-none focus:ring-2 focus:ring-pm-primary"
+                                    >
+                                        <option value="">Não definido</option>
+                                        {updaterOptions.map(option => (
+                                            <option key={option.id} value={option.id}>{option.email || option.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                                <div>
+                                    <label className="flex items-center gap-1 block text-[10px] font-black uppercase tracking-wider text-pm-secondary mb-1">
+                                        <AlertCircle className="w-3 h-3" /> Horário limite
+                                    </label>
+                                    <input
+                                        type="time"
+                                        value={draft.deadlineTime}
+                                        onChange={event => handleUpdateAlertDraft(draft.unitId, 'deadlineTime', event.target.value)}
+                                        className="w-full border border-pm-secondary/30 rounded-lg px-3 py-2 text-sm bg-white outline-none focus:ring-2 focus:ring-pm-primary"
+                                    />
+                                </div>
+                            </div>
+                            <div className="mt-4">
+                                <label className="mb-2 flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-pm-secondary">
+                                    <CalendarDays className="w-3 h-3" /> Dias de atualização
+                                </label>
+                                <div className="flex flex-wrap gap-2">
+                                    {WEEKDAYS.map(day => (
+                                        <button
+                                            type="button"
+                                            key={day.value}
+                                            onClick={() => handleToggleAlertWeekday(draft.unitId, day.value)}
+                                            className={`rounded-lg border px-3 py-2 text-xs font-black transition-colors ${
+                                                draft.weekdays.includes(day.value)
+                                                    ? 'border-pm-primary bg-pm-primary text-white'
+                                                    : 'border-pm-secondary/20 bg-white text-pm-secondary hover:border-pm-primary/40'
+                                            }`}
+                                        >
+                                            {day.label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </div>
+                            {(draft.sectorId || draft.updaterId) && (
+                                <p className="mt-3 flex flex-wrap items-center gap-2 text-[10px] font-bold uppercase tracking-widest text-pm-secondary">
+                                    {draft.sectorId && responsibleSectors.find(sector => sector.id === draft.sectorId)?.name}
+                                    {draft.sectorId && draft.updaterId && <span>·</span>}
+                                    {draft.updaterId && <><UserRound className="h-3 w-3" /> {updaterOptions.find(option => option.id === draft.updaterId)?.email || updaterOptions.find(option => option.id === draft.updaterId)?.name}</>}
+                                </p>
+                            )}
                         </div>
                     ))}
+                    {alertRuleDrafts.length === 0 && (
+                        <p className="py-8 text-center text-sm font-bold text-pm-secondary">Nenhum tópico geral disponível para monitoramento.</p>
+                    )}
                 </div>
             </div>
 
@@ -795,7 +975,7 @@ function TabNotifications() {
                     className="px-5 py-2 rounded-lg text-sm font-medium bg-pm-primary text-pm-light hover:bg-pm-primary/90 transition-colors shadow-sm flex items-center gap-2 disabled:opacity-50"
                 >
                     {isSaving ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                    {isSaving ? 'Salvando...' : 'Salvar Notificações'}
+                    {isSaving ? 'Salvando...' : 'Salvar configurações e alertas'}
                 </button>
             </div>
         </div>

@@ -68,6 +68,46 @@ const GeneralRankingChart = lazy(() =>
 const ChartFallback = () => <div className="h-full w-full animate-pulse rounded-2xl bg-pm-light/70" />;
 
 type DashboardTab = "overview" | "indicators" | "records" | "detail";
+type UpdateAlertStatus = "overdue" | "late" | "pending" | "complete";
+
+const getRecurringUpdateCycle = (
+  rule: { startsAt: string; weekdays: number[]; deadlineTime: string },
+  now = new Date(),
+) => {
+  const activatedAt = new Date(rule.startsAt);
+  const [hours = 18, minutes = 0] = rule.deadlineTime.split(":").map(Number);
+  const deadlines: Date[] = [];
+
+  for (let offset = -15; offset <= 8; offset += 1) {
+    const deadline = new Date(now);
+    deadline.setDate(now.getDate() + offset);
+    deadline.setHours(hours, minutes, 0, 0);
+    if (rule.weekdays.includes(deadline.getDay()) && deadline.getTime() >= activatedAt.getTime()) {
+      deadlines.push(deadline);
+    }
+  }
+
+  deadlines.sort((left, right) => left.getTime() - right.getTime());
+  const elapsedDeadlines = deadlines.filter((deadline) => deadline.getTime() <= now.getTime());
+  const elapsed = elapsedDeadlines[elapsedDeadlines.length - 1];
+  const upcoming = deadlines.find((deadline) => deadline.getTime() > now.getTime());
+
+  if (!elapsed) {
+    return {
+      startsAt: activatedAt,
+      dueAt: upcoming ?? activatedAt,
+      hasElapsedDeadline: false,
+    };
+  }
+
+  const previousDeadlines = deadlines.filter((deadline) => deadline.getTime() < elapsed.getTime());
+  const previous = previousDeadlines[previousDeadlines.length - 1];
+  return {
+    startsAt: previous ?? activatedAt,
+    dueAt: elapsed,
+    hasElapsedDeadline: true,
+  };
+};
 
 const formatDashboardValue = (field: { type: string; value: unknown }) => {
   const numericValue = Number(field.value);
@@ -162,10 +202,13 @@ export default function DashboardExecutivo() {
     fields,
     users,
     entries,
+    fieldValues,
     getValuesForEntry,
     user,
     collectionItems,
+    collectionFieldValues,
     getValuesForItem,
+    unitUpdateAlertRules,
   } = useAuth();
   const units = useMemo(
     () =>
@@ -228,6 +271,79 @@ export default function DashboardExecutivo() {
 
     return units.filter((unit) => unit.name.toLowerCase().includes(search));
   }, [units, unitFilterSearch]);
+
+  const updateAlerts = useMemo(() => {
+    const hasValue = (value: unknown) => {
+      if (value === null || value === undefined) return false;
+      if (typeof value === "string") return value.trim().length > 0;
+      if (Array.isArray(value)) return value.length > 0;
+      return true;
+    };
+
+    return unitUpdateAlertRules
+      .filter((rule) => rule.isActive)
+      .map((rule) => {
+        const unit = units.find((candidate) => candidate.id === rule.unitId);
+        if (!unit) return null;
+
+        const unitEntryIds = new Set(entries.filter((entry) => entry.unitId === unit.id).map((entry) => entry.id));
+        const activeItemIds = new Set(collectionItems
+          .filter((item) => item.unitId === unit.id && item.status !== "archived")
+          .map((item) => item.id));
+        const snapshotUpdates = fieldValues
+          .filter((value) => unitEntryIds.has(value.entryId) && hasValue(value.value))
+          .map((value) => value.updatedAt);
+        const collectionUpdates = collectionFieldValues
+          .filter((value) =>
+            activeItemIds.has(value.itemId) &&
+            (hasValue(value.valueText) || value.valueNumber !== null || hasValue(value.valueJson)),
+          )
+          .map((value) => value.updatedAt);
+        const cycle = getRecurringUpdateCycle(rule);
+        const latestUpdate = [...snapshotUpdates, ...collectionUpdates]
+          .filter((updatedAt) => new Date(updatedAt).getTime() >= cycle.startsAt.getTime())
+          .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0] ?? null;
+        const latestAt = latestUpdate ? new Date(latestUpdate).getTime() : 0;
+        const completed = latestAt >= cycle.startsAt.getTime();
+        const status: UpdateAlertStatus = !cycle.hasElapsedDeadline
+          ? "pending"
+          : completed
+            ? (latestAt > cycle.dueAt.getTime() ? "late" : "complete")
+            : "overdue";
+
+        return {
+          unit,
+          rule,
+          dueAt: cycle.dueAt,
+          latestUpdate,
+          status,
+          responsibleUpdater: unit.responsibleUpdaterId
+            ? users.find((candidate) => candidate.id === unit.responsibleUpdaterId)?.name || "Responsável configurado"
+            : "Não definido",
+        };
+      })
+      .filter(Boolean)
+      .sort((left, right) => {
+        const priority: Record<UpdateAlertStatus, number> = { overdue: 0, late: 1, pending: 2, complete: 3 };
+        const first = left!;
+        const second = right!;
+        return priority[first.status] - priority[second.status] ||
+          first.dueAt.getTime() - second.dueAt.getTime();
+      }) as Array<{
+        unit: (typeof units)[number];
+        rule: (typeof unitUpdateAlertRules)[number];
+        dueAt: Date;
+        latestUpdate: string | null;
+        status: UpdateAlertStatus;
+        responsibleUpdater: string;
+      }>;
+  }, [collectionFieldValues, collectionItems, entries, fieldValues, unitUpdateAlertRules, units, users]);
+
+  const actionableAlerts = updateAlerts.filter((alert) => alert.status !== "complete");
+  const overdueAlertCount = updateAlerts.filter((alert) => alert.status === "overdue").length;
+  const lateAlertCount = updateAlerts.filter((alert) => alert.status === "late").length;
+  const pendingAlertCount = updateAlerts.filter((alert) => alert.status === "pending").length;
+  const visibleActionableAlerts = actionableAlerts.slice(0, 5);
 
   // LÓGICA 1 (NOVA): Hierarquia de Snapshots via DataGroupEntries
   const hierarchicalView = useMemo(() => {
@@ -875,6 +991,70 @@ export default function DashboardExecutivo() {
           />
         </div>
       </div>
+
+      {user?.role !== "editor" && updateAlerts.length > 0 && (
+        <section className="rounded-2xl border border-pm-secondary/15 bg-white p-4 shadow-sm">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-center">
+            <div className="min-w-[220px]">
+              <p className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-pm-secondary">
+                <ShieldAlert className="h-4 w-4 text-amber-600" /> Alertas
+              </p>
+              <h3 className="mt-1 text-base font-black text-pm-dark">Controle de atualização</h3>
+            </div>
+            <div className="grid grid-cols-3 gap-2 sm:min-w-[360px]">
+              <div className={`rounded-xl px-3 py-2 text-center ${overdueAlertCount > 0 ? "bg-red-50 text-red-700" : "bg-pm-light text-pm-secondary"}`}>
+                <strong className="block text-lg font-black">{overdueAlertCount}</strong>
+                <span className="text-[9px] font-black uppercase tracking-wider">em atraso</span>
+              </div>
+              <div className={`rounded-xl px-3 py-2 text-center ${lateAlertCount > 0 ? "bg-amber-50 text-amber-700" : "bg-pm-light text-pm-secondary"}`}>
+                <strong className="block text-lg font-black">{lateAlertCount}</strong>
+                <span className="text-[9px] font-black uppercase tracking-wider">atrasado</span>
+              </div>
+              <div className="rounded-xl bg-blue-50 px-3 py-2 text-center text-blue-700">
+                <strong className="block text-lg font-black">{pendingAlertCount}</strong>
+                <span className="text-[9px] font-black uppercase tracking-wider">aguardando</span>
+              </div>
+            </div>
+            <div className="min-w-0 flex-1">
+              {actionableAlerts.length === 0 ? (
+                <p className="rounded-xl bg-emerald-50 px-4 py-3 text-xs font-bold text-emerald-800">
+                  Todos os tópicos monitorados foram atualizados dentro do ciclo vigente.
+                </p>
+              ) : (
+                <div className="overflow-hidden rounded-xl border border-pm-secondary/10">
+                  {visibleActionableAlerts.map((alert) => (
+                    <div key={alert.rule.id} className="grid grid-cols-1 gap-2 border-b border-pm-secondary/10 px-3 py-2 last:border-b-0 md:grid-cols-[1fr_auto_auto] md:items-center">
+                      <div className="min-w-0">
+                        <p className="truncate text-xs font-black uppercase text-pm-dark">{alert.unit.name}</p>
+                        <p className="truncate text-[10px] font-bold uppercase tracking-wide text-pm-secondary">
+                          {alert.unit.responsibleSector || "Setor não definido"} · {alert.responsibleUpdater}
+                        </p>
+                      </div>
+                      <span className="text-[10px] font-bold uppercase tracking-wide text-pm-secondary">
+                        {alert.dueAt.toLocaleDateString("pt-BR")} {alert.dueAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+                      </span>
+                      <span className={`w-fit rounded-full px-2.5 py-1 text-[9px] font-black uppercase ${
+                        alert.status === "overdue"
+                          ? "bg-red-100 text-red-700"
+                          : alert.status === "late"
+                            ? "bg-amber-100 text-amber-700"
+                            : "bg-blue-100 text-blue-700"
+                      }`}>
+                        {alert.status === "overdue" ? "Não atualizado" : alert.status === "late" ? "Com atraso" : "Aguardando"}
+                      </span>
+                    </div>
+                  ))}
+                  {actionableAlerts.length > visibleActionableAlerts.length && (
+                    <div className="bg-pm-light/40 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-pm-secondary">
+                      +{actionableAlerts.length - visibleActionableAlerts.length} pendências adicionais
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+      )}
 
       <nav className="flex flex-wrap gap-2 rounded-2xl border border-pm-secondary/15 bg-white p-2 shadow-sm">
         {dashboardTabs.map((tab) => {

@@ -188,7 +188,7 @@ function IconPickerModal({ value, onConfirm, onClose }: IconPickerModalProps) {
 }
 
 export default function AdminDynamicForms() {
-    const { units, regionalCommands, dataGroups, fields, users, addUnit, updateUnit, deleteUnit, addDataGroup, updateDataGroup, deleteDataGroup, addField, updateField, deleteField, fieldValues } = useAuth();
+    const { units, regionalCommands, dataGroups, fields, users, responsibleSectors, addUnit, updateUnit, deleteUnit, addDataGroup, updateDataGroup, deleteDataGroup, addField, updateField, deleteField, fieldValues } = useAuth();
     const briefingUnits = units.filter(unit => isGeneralBriefingUnit(unit, regionalCommands));
 
     const [selectedUnit, setSelectedUnit] = useState<string | null>(briefingUnits[0]?.id || null);
@@ -254,8 +254,8 @@ export default function AdminDynamicForms() {
         ...dataGroups.map(group => group.categoryTitle?.trim())
     ].filter(Boolean) as string[])).sort(compareTextPtBr);
     const updaterOptions = users
-        .filter(candidate => candidate.role === 'editor' && candidate.isActive !== false)
-        .sort((left, right) => compareTextPtBr(left.name, right.name));
+        .filter(candidate => candidate.isActive !== false)
+        .sort((left, right) => compareTextPtBr(left.email || left.name, right.email || right.name));
     const getCategoryOrder = (categoryTitle: string) => {
         const matching = briefingUnits.filter(unit => (unit.reportCategoryTitle || '').trim() === categoryTitle);
         return matching.length > 0 ? Math.min(...matching.map(unit => unit.reportCategoryOrder ?? 999)) : categoryOptions.length + 1;
@@ -278,6 +278,7 @@ export default function AdminDynamicForms() {
             regionName: newUnitRegion.trim() || null,
             regionalAscom: newUnitAscom.trim() || null,
             responsibleSector: newUnitResponsibleSector.trim() || null,
+            responsibleSectorId: responsibleSectors.find(sector => sector.name === newUnitResponsibleSector.trim())?.id ?? null,
             responsibleUpdaterId: newUnitResponsibleUpdaterId || null,
             reportCategoryTitle: newUnitCategory.trim() || null,
             reportCategoryOrder: newUnitCategory.trim() ? getCategoryOrder(newUnitCategory.trim()) : 999
@@ -302,6 +303,7 @@ export default function AdminDynamicForms() {
             regionName: editUnitRegion.trim() || null,
             regionalAscom: editUnitAscom.trim() || null,
             responsibleSector: editUnitResponsibleSector.trim() || null,
+            responsibleSectorId: responsibleSectors.find(sector => sector.name === editUnitResponsibleSector.trim())?.id ?? null,
             responsibleUpdaterId: editUnitResponsibleUpdaterId || null,
             reportCategoryTitle: editUnitCategory.trim() || null,
             reportCategoryOrder: editUnitCategory.trim() ? getCategoryOrder(editUnitCategory.trim()) : 999
@@ -691,15 +693,18 @@ export default function AdminDynamicForms() {
 
                                 <div>
                                     <label className="input-label">SETOR RESPONSÁVEL</label>
-                                    <input
-                                        type="text"
-                                        placeholder="Ex: DCS, DOP, Coordenação de Saúde..."
+                                    <select
                                         value={newUnitResponsibleSector}
                                         onChange={e => setNewUnitResponsibleSector(e.target.value)}
                                         className="input-field"
-                                    />
+                                    >
+                                        <option value="">Não definido</option>
+                                        {responsibleSectors.filter(sector => sector.isActive).map(sector => (
+                                            <option key={sector.id} value={sector.name}>{sector.name}</option>
+                                        ))}
+                                    </select>
                                     <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
-                                        Área responsável pelo tópico, independente dos usuários que abastecem os dados.
+                                        Cadastre setores no módulo de alertas e selecione a área responsável pelo tópico.
                                     </p>
                                 </div>
 
@@ -712,7 +717,7 @@ export default function AdminDynamicForms() {
                                     >
                                         <option value="">Não definido</option>
                                         {updaterOptions.map(option => (
-                                            <option key={option.id} value={option.id}>{option.name}</option>
+                                            <option key={option.id} value={option.id}>{option.email || option.name}</option>
                                         ))}
                                     </select>
                                     <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
@@ -1202,13 +1207,16 @@ export default function AdminDynamicForms() {
 
                             <div>
                                 <label className="input-label">SETOR RESPONSÁVEL</label>
-                                <input
-                                    type="text"
+                                <select
                                     value={editUnitResponsibleSector}
                                     onChange={e => setEditUnitResponsibleSector(e.target.value)}
                                     className="input-field h-14"
-                                    placeholder="Ex: DCS, DOP, Coordenação de Saúde..."
-                                />
+                                >
+                                    <option value="">Não definido</option>
+                                    {responsibleSectors.filter(sector => sector.isActive).map(sector => (
+                                        <option key={sector.id} value={sector.name}>{sector.name}</option>
+                                    ))}
+                                </select>
                                 <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
                                     Este setor será exibido no dashboard e nos relatórios do tópico.
                                 </p>
@@ -1222,7 +1230,7 @@ export default function AdminDynamicForms() {
                                 >
                                     <option value="">Não definido</option>
                                     {updaterOptions.map(option => (
-                                        <option key={option.id} value={option.id}>{option.name}</option>
+                                        <option key={option.id} value={option.id}>{option.email || option.name}</option>
                                     ))}
                                 </select>
                                 <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
