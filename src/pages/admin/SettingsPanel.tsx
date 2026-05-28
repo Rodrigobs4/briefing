@@ -12,6 +12,7 @@ import { getPublicUploadUrl } from '../../utils/storageUrls';
 import { STORAGE_BUCKET_UPLOADS } from '../../config/storage';
 import { compareTextPtBr, sortByTextPtBr } from '../../utils/textOrdering';
 import { isGeneralBriefingUnit } from '../../utils/generalBriefingUnits';
+import { sendSystemEmail } from '../../utils/email';
 
 type Tab = 'general' | 'security' | 'notifications' | 'indicators';
 
@@ -502,12 +503,14 @@ function TabNotifications() {
     const [newType, setNewType] = useState<'info' | 'warning' | 'success' | 'error'>('info');
     const [newRole, setNewRole] = useState<'all' | 'admin' | 'editor' | 'commander'>('all');
 
-    // Estados para SMTP e regras de cobrança
+    // Estados para e-mail e regras de cobrança
     const [smtpServer, setSmtpServer] = useState('');
     const [smtpPort, setSmtpPort] = useState(587);
     const [smtpUser, setSmtpUser] = useState('');
     const [smtpPass, setSmtpPass] = useState('');
     const [smtpFrom, setSmtpFrom] = useState('');
+    const [testEmailTo, setTestEmailTo] = useState('');
+    const [isSendingTestEmail, setIsSendingTestEmail] = useState(false);
     const [newSectorName, setNewSectorName] = useState('');
     const [alertRuleDrafts, setAlertRuleDrafts] = useState<AlertRuleDraft[]>([]);
     const [isSaving, setIsSaving] = useState(false);
@@ -518,9 +521,13 @@ function TabNotifications() {
             setSmtpPort(settings.smtp_port || 587);
             setSmtpUser(settings.smtp_user || '');
             setSmtpPass(settings.smtp_pass || '');
-            setSmtpFrom(settings.smtp_from || 'noreply@pmba.gov.br');
+            setSmtpFrom(settings.smtp_from || 'noreply@briefing.pmdabahia.com.br');
         }
     }, [settings]);
+
+    useEffect(() => {
+        setTestEmailTo(user?.email || '');
+    }, [user?.email]);
 
     useEffect(() => {
         setAlertRuleDrafts(sortByTextPtBr(briefingUnits, unit => unit.name).map(unit => {
@@ -628,11 +635,26 @@ function TabNotifications() {
     };
 
     const sendTestEmail = async () => {
-        if (!smtpServer || !smtpUser || !smtpFrom) {
-            alert('Preencha os campos de SMTP antes de testar.');
+        if (!testEmailTo.trim()) {
+            alert('Informe o destinatário do e-mail de teste.');
             return;
         }
-        alert(`Simulando envio de e-mail de teste através de ${smtpServer}...\n\n(No ambiente de produção, este comando acionaria um Edge Function de envio).`);
+
+        setIsSendingTestEmail(true);
+        try {
+            await sendSystemEmail({
+                to: testEmailTo.trim(),
+                subject: 'Teste de e-mail - Sistema Briefing',
+                text: 'Este é um e-mail de teste enviado pelo Sistema Briefing usando Resend.',
+                html: '<p>Este é um e-mail de teste enviado pelo <strong>Sistema Briefing</strong> usando Resend.</p>',
+            });
+            alert('E-mail de teste enviado com sucesso.');
+        } catch (error) {
+            console.error(error);
+            alert(`Erro ao enviar e-mail de teste. ${error instanceof Error ? error.message : ''}`);
+        } finally {
+            setIsSendingTestEmail(false);
+        }
     };
 
     const channels = [
@@ -804,39 +826,39 @@ function TabNotifications() {
 
             {/* Config de E-mail */}
             <div className="bg-white p-6 rounded-xl shadow-sm border border-pm-secondary/20">
-                <h3 className="font-bold text-pm-dark border-b border-pm-secondary/10 pb-3 mb-4">Configuração de E-mail (SMTP)</h3>
+                <h3 className="font-bold text-pm-dark border-b border-pm-secondary/10 pb-3 mb-4">Configuração de E-mail (Resend)</h3>
+                <p className="text-xs text-pm-secondary mb-4">
+                    A chave do Resend fica protegida nas variáveis da Supabase Edge Function. Esta tela salva apenas metadados visíveis e permite testar o envio.
+                </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                        <label className="block text-sm font-medium text-pm-dark mb-1">Servidor SMTP</label>
-                        <input type="text" value={smtpServer} onChange={e => setSmtpServer(e.target.value)} placeholder="smtp.example.com"
+                        <label className="block text-sm font-medium text-pm-dark mb-1">Provedor</label>
+                        <input type="text" value={smtpServer} onChange={e => setSmtpServer(e.target.value)} placeholder="Resend"
                             className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none" />
                     </div>
                     <div>
-                        <label className="block text-sm font-medium text-pm-dark mb-1">Porta</label>
-                        <input type="number" value={smtpPort} onChange={e => setSmtpPort(Number(e.target.value))} placeholder="587"
+                        <label className="block text-sm font-medium text-pm-dark mb-1">Domínio</label>
+                        <input type="text" value={smtpUser} onChange={e => setSmtpUser(e.target.value)} placeholder="briefing.pmdabahia.com.br"
                             className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none" />
                     </div>
                     <div>
-                        <label className="block text-sm font-medium text-pm-dark mb-1">Usuário SMTP</label>
-                        <input type="email" value={smtpUser} onChange={e => setSmtpUser(e.target.value)} placeholder="noreply@pmba.gov.br"
+                        <label className="block text-sm font-medium text-pm-dark mb-1">E-mail de Origem</label>
+                        <input type="email" value={smtpFrom} onChange={e => setSmtpFrom(e.target.value)} placeholder="noreply@briefing.pmdabahia.com.br"
                             className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none" />
                     </div>
                     <div>
-                        <label className="block text-sm font-medium text-pm-dark mb-1">Senha SMTP</label>
-                        <input type="password" value={smtpPass} onChange={e => setSmtpPass(e.target.value)} placeholder="••••••••"
+                        <label className="block text-sm font-medium text-pm-dark mb-1">Destinatário do Teste</label>
+                        <input type="email" value={testEmailTo} onChange={e => setTestEmailTo(e.target.value)} placeholder="seu@email.com"
                             className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none" />
                     </div>
-                </div>
-                <div className="mt-4">
-                    <label className="block text-sm font-medium text-pm-dark mb-1">E-mail de Origem</label>
-                    <input type="email" value={smtpFrom} onChange={e => setSmtpFrom(e.target.value)}
-                        className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none" />
                 </div>
                 <button 
                     onClick={sendTestEmail}
-                    className="mt-4 px-4 py-2 border border-pm-secondary/30 text-pm-dark rounded-lg text-sm font-medium hover:bg-pm-light transition-colors flex items-center gap-2"
+                    disabled={isSendingTestEmail}
+                    className="mt-4 px-4 py-2 border border-pm-secondary/30 text-pm-dark rounded-lg text-sm font-medium hover:bg-pm-light transition-colors flex items-center gap-2 disabled:opacity-60"
                 >
-                    <Bell className="w-4 h-4" /> Enviar E-mail de Teste
+                    {isSendingTestEmail ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Bell className="w-4 h-4" />}
+                    {isSendingTestEmail ? 'Enviando...' : 'Enviar E-mail de Teste'}
                 </button>
             </div>
 
