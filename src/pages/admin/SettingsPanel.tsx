@@ -510,6 +510,10 @@ function TabNotifications() {
     const [smtpPass, setSmtpPass] = useState('');
     const [smtpFrom, setSmtpFrom] = useState('');
     const [testEmailTo, setTestEmailTo] = useState('');
+    const [emailRecipientMode, setEmailRecipientMode] = useState<'self' | 'admin' | 'commander' | 'editor' | 'all' | 'custom'>('self');
+    const [customRecipients, setCustomRecipients] = useState('');
+    const [emailSubject, setEmailSubject] = useState('Mensagem do Sistema Briefing');
+    const [emailMessage, setEmailMessage] = useState('');
     const [isSendingTestEmail, setIsSendingTestEmail] = useState(false);
     const [newSectorName, setNewSectorName] = useState('');
     const [alertRuleDrafts, setAlertRuleDrafts] = useState<AlertRuleDraft[]>([]);
@@ -528,6 +532,33 @@ function TabNotifications() {
     useEffect(() => {
         setTestEmailTo(user?.email || '');
     }, [user?.email]);
+
+    const emailRecipientOptions = [
+        { value: 'self', label: 'Meu e-mail' },
+        { value: 'admin', label: 'Administradores' },
+        { value: 'commander', label: 'Comandantes' },
+        { value: 'editor', label: 'Editores' },
+        { value: 'all', label: 'Todos os usuários ativos' },
+        { value: 'custom', label: 'Destinatários manuais' }
+    ] as const;
+
+    const getManualRecipients = () => customRecipients
+        .split(/[\n,;]+/)
+        .map(email => email.trim())
+        .filter(Boolean);
+
+    const getSelectedRecipients = () => {
+        if (emailRecipientMode === 'self') return testEmailTo.trim() ? [testEmailTo.trim()] : [];
+        if (emailRecipientMode === 'custom') return getManualRecipients();
+
+        return users
+            .filter(candidate => candidate.isActive !== false)
+            .filter(candidate => emailRecipientMode === 'all' || candidate.role === emailRecipientMode)
+            .map(candidate => candidate.email?.trim())
+            .filter((email): email is string => Boolean(email));
+    };
+
+    const selectedEmailRecipients = Array.from(new Set(getSelectedRecipients()));
 
     useEffect(() => {
         setAlertRuleDrafts(sortByTextPtBr(briefingUnits, unit => unit.name).map(unit => {
@@ -635,23 +666,39 @@ function TabNotifications() {
     };
 
     const sendTestEmail = async () => {
-        if (!testEmailTo.trim()) {
-            alert('Informe o destinatário do e-mail de teste.');
+        const recipients = emailRecipientMode === 'self' && testEmailTo.trim()
+            ? [testEmailTo.trim()]
+            : selectedEmailRecipients;
+
+        if (recipients.length === 0) {
+            alert('Selecione pelo menos um destinatário com e-mail válido.');
+            return;
+        }
+        if (recipients.length > 50) {
+            alert('Selecione no máximo 50 destinatários por envio.');
+            return;
+        }
+        if (!emailSubject.trim()) {
+            alert('Informe o assunto do e-mail.');
+            return;
+        }
+        if (!emailMessage.trim()) {
+            alert('Informe a mensagem do e-mail.');
             return;
         }
 
         setIsSendingTestEmail(true);
         try {
             await sendSystemEmail({
-                to: testEmailTo.trim(),
-                subject: 'Teste de e-mail - Sistema Briefing',
-                text: 'Este é um e-mail de teste enviado pelo Sistema Briefing usando Resend.',
-                html: '<p>Este é um e-mail de teste enviado pelo <strong>Sistema Briefing</strong> usando Resend.</p>',
+                to: recipients,
+                subject: emailSubject.trim(),
+                text: emailMessage.trim(),
+                html: `<p>${emailMessage.trim().replace(/\n/g, '<br />')}</p>`,
             });
-            alert('E-mail de teste enviado com sucesso.');
+            alert(`E-mail enviado com sucesso para ${recipients.length} destinatário(s).`);
         } catch (error) {
             console.error(error);
-            alert(`Erro ao enviar e-mail de teste. ${error instanceof Error ? error.message : ''}`);
+            alert(`Erro ao enviar e-mail. ${error instanceof Error ? error.message : ''}`);
         } finally {
             setIsSendingTestEmail(false);
         }
@@ -828,7 +875,7 @@ function TabNotifications() {
             <div className="bg-white p-6 rounded-xl shadow-sm border border-pm-secondary/20">
                 <h3 className="font-bold text-pm-dark border-b border-pm-secondary/10 pb-3 mb-4">Configuração de E-mail (Resend)</h3>
                 <p className="text-xs text-pm-secondary mb-4">
-                    A chave do Resend fica protegida nas variáveis da Supabase Edge Function. Esta tela salva apenas metadados visíveis e permite testar o envio.
+                    O envio usa a API da Vercel. A chave do Resend deve ficar nas variáveis de ambiente da Vercel, nunca no navegador.
                 </p>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
@@ -847,18 +894,62 @@ function TabNotifications() {
                             className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none" />
                     </div>
                     <div>
-                        <label className="block text-sm font-medium text-pm-dark mb-1">Destinatário do Teste</label>
-                        <input type="email" value={testEmailTo} onChange={e => setTestEmailTo(e.target.value)} placeholder="seu@email.com"
+                        <label className="block text-sm font-medium text-pm-dark mb-1">Destinatários</label>
+                        <select
+                            value={emailRecipientMode}
+                            onChange={event => setEmailRecipientMode(event.target.value as typeof emailRecipientMode)}
+                            className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none bg-white"
+                        >
+                            {emailRecipientOptions.map(option => (
+                                <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                        </select>
+                    </div>
+                    {emailRecipientMode === 'self' && (
+                        <div>
+                            <label className="block text-sm font-medium text-pm-dark mb-1">Meu Destinatário</label>
+                            <input type="email" value={testEmailTo} onChange={e => setTestEmailTo(e.target.value)} placeholder="seu@email.com"
+                                className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none" />
+                        </div>
+                    )}
+                    {emailRecipientMode === 'custom' && (
+                        <div className="sm:col-span-2">
+                            <label className="block text-sm font-medium text-pm-dark mb-1">Destinatários Manuais</label>
+                            <textarea
+                                value={customRecipients}
+                                onChange={event => setCustomRecipients(event.target.value)}
+                                rows={3}
+                                placeholder="um@email.com, outro@email.com"
+                                className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none resize-none"
+                            />
+                        </div>
+                    )}
+                    <div className="sm:col-span-2">
+                        <label className="block text-sm font-medium text-pm-dark mb-1">Assunto</label>
+                        <input type="text" value={emailSubject} onChange={e => setEmailSubject(e.target.value)} placeholder="Assunto do e-mail"
                             className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none" />
+                    </div>
+                    <div className="sm:col-span-2">
+                        <label className="block text-sm font-medium text-pm-dark mb-1">Mensagem</label>
+                        <textarea
+                            value={emailMessage}
+                            onChange={event => setEmailMessage(event.target.value)}
+                            rows={5}
+                            placeholder="Digite a mensagem que será enviada por e-mail..."
+                            className="w-full border border-pm-secondary/30 rounded-lg px-4 py-3 text-sm focus:ring-2 focus:ring-pm-primary outline-none resize-none"
+                        />
+                        <p className="mt-2 text-xs text-pm-secondary">
+                            Destinatários encontrados: {selectedEmailRecipients.length}. Limite por envio: 50.
+                        </p>
                     </div>
                 </div>
                 <button 
                     onClick={sendTestEmail}
-                    disabled={isSendingTestEmail}
+                    disabled={isSendingTestEmail || selectedEmailRecipients.length === 0}
                     className="mt-4 px-4 py-2 border border-pm-secondary/30 text-pm-dark rounded-lg text-sm font-medium hover:bg-pm-light transition-colors flex items-center gap-2 disabled:opacity-60"
                 >
                     {isSendingTestEmail ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Bell className="w-4 h-4" />}
-                    {isSendingTestEmail ? 'Enviando...' : 'Enviar E-mail de Teste'}
+                    {isSendingTestEmail ? 'Enviando...' : 'Enviar Mensagem'}
                 </button>
             </div>
 

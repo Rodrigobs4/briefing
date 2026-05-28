@@ -24,9 +24,24 @@ export const sendSystemEmail = async (payload: SendSystemEmailPayload) => {
         body: JSON.stringify(payload),
     });
 
-    const data = await response.json();
+    const responseText = await response.text();
+    let data: { success?: boolean; id?: string; error?: string } = {};
+
+    if (responseText) {
+        try {
+            data = JSON.parse(responseText);
+        } catch {
+            throw new Error(
+                'A rota de envio respondeu em formato inválido. Em desenvolvimento local, use "vercel dev" para testar /api/send-email; "npm run dev" roda apenas o frontend.'
+            );
+        }
+    }
+
     if (!response.ok || data?.error) {
-        throw new Error(data?.error || 'Erro ao enviar e-mail.');
+        throw new Error(
+            data?.error ||
+            'A rota de envio não retornou uma resposta válida. Verifique se /api/send-email está disponível na Vercel.'
+        );
     }
 
     return data as { success: true; id?: string };

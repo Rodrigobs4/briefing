@@ -46,6 +46,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     try {
         const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
         const supabaseAnonKey = process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+        const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
         const resendApiKey = process.env.RESEND_API_KEY;
         const from = process.env.RESEND_FROM_EMAIL || 'Sistema Briefing <noreply@briefing.pmdabahia.com.br>';
 
@@ -68,24 +69,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const { data: { user }, error: userError } = await supabaseUserClient.auth.getUser(token);
         if (userError || !user) throw new Error('JWT inválido.');
 
-        const { data: profile, error: profileError } = await supabaseUserClient
+        const profileClient = serviceRoleKey
+            ? createClient(supabaseUrl, serviceRoleKey)
+            : supabaseUserClient;
+
+        const { data: profile, error: profileError } = await profileClient
             .from('profiles')
             .select('role')
             .eq('id', user.id)
             .single();
 
-        if (profileError) throw profileError;
+        if (profileError) {
+            throw new Error(
+                serviceRoleKey
+                    ? profileError.message
+                    : `Não foi possível confirmar seu perfil de administrador. Configure SUPABASE_SERVICE_ROLE_KEY na Vercel ou revise a política RLS de profiles. Detalhe: ${profileError.message}`
+            );
+        }
         if (!profile || profile.role !== 'admin') {
             throw new Error('Acesso Negado: Apenas administradores podem enviar e-mails do sistema.');
         }
 
-        const payload = (req.body || {}) as Partial<SendEmailPayload>;
+        const payload = (typeof req.body === 'string' ? JSON.parse(req.body) : req.body || {}) as Partial<SendEmailPayload>;
         const recipients = Array.isArray(payload.to) ? payload.to : [payload.to];
 
-        if (recipients.length === 0 || recipients.length > 10 || recipients.some(email => typeof email !== 'string')) {
-            throw new Error('Informe de 1 a 10 destinatários.');
+        if (recipients.length === 0 || recipients.length > 50 || recipients.some(email => typeof email !== 'string')) {
+            throw new Error('Informe de 1 a 50 destinatários.');
         }
-        if (recipients.some(email => !isValidEmail(email))) {
+        const validRecipients = recipients as string[];
+        if (validRecipients.some(email => !isValidEmail(email))) {
             throw new Error('Há destinatários com e-mail inválido.');
         }
         if (!payload.subject?.trim()) {
@@ -106,7 +118,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             },
             body: JSON.stringify({
                 from,
-                to: recipients,
+                to: validRecipients,
                 subject: payload.subject.trim(),
                 text: payload.text,
                 html: payload.html,
