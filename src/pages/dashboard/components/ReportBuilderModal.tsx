@@ -593,19 +593,19 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
     };
 
     return (
-        <div className="fixed inset-0 bg-pm-dark/70 backdrop-blur-sm z-50 flex items-center justify-center p-2 md:p-4">
-            <div className="bg-[#f8f7f2] rounded-2xl shadow-2xl w-full max-w-[96vw] h-[94vh] border border-white/70 flex flex-col overflow-hidden">
-                <div className="bg-white px-5 py-4 border-b border-pm-secondary/15 shrink-0">
-                    <div className="flex items-start justify-between gap-4">
+        <div className="fixed inset-0 bg-pm-dark/70 backdrop-blur-sm z-50 flex items-stretch md:items-center justify-center p-0 md:p-4">
+            <div className="bg-[#f8f7f2] rounded-none md:rounded-2xl shadow-2xl w-full max-w-[96vw] h-[100dvh] md:h-[94vh] border border-white/70 flex flex-col overflow-hidden">
+                <div className="bg-white px-4 md:px-5 py-3 md:py-4 border-b border-pm-secondary/15 shrink-0">
+                    <div className="flex items-start justify-between gap-3">
                         <div>
                             <div className="flex items-center gap-2 text-[11px] font-black uppercase tracking-[0.18em] text-pm-secondary">
                                 <Printer className="w-4 h-4 text-pm-primary" />
                                 Impressão executiva
                             </div>
-                            <h2 className="text-2xl font-black text-pm-dark tracking-tight mt-1">
+                            <h2 className="text-lg md:text-2xl font-black text-pm-dark tracking-tight mt-1">
                                 Gerenciador do Briefing Geral
                             </h2>
-                            <p className="text-sm text-pm-secondary mt-1">
+                            <p className="hidden sm:block text-sm text-pm-secondary mt-1">
                                 Monte apenas o briefing geral por categorias, ordem de leitura e seções selecionadas.
                             </p>
                         </div>
@@ -614,8 +614,8 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                         </button>
                     </div>
 
-                    <div className="flex flex-col lg:flex-row lg:flex-wrap 2xl:flex-nowrap lg:items-end justify-between gap-4 mt-4">
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5 flex-1">
+                    <div className="flex flex-col lg:flex-row lg:flex-wrap 2xl:flex-nowrap lg:items-end justify-between gap-3 md:gap-4 mt-3 md:mt-4">
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 flex-1">
                         <div className="bg-[#ede7d2] border border-[#d7ca9a] rounded-lg px-3 py-2.5">
                             <span className="text-[10px] uppercase tracking-widest font-black text-pm-secondary flex items-center gap-1.5">
                                 <Building2 className="w-3.5 h-3.5" /> Tópicos
@@ -642,7 +642,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                         </div>
                         </div>
 
-                        <div className="bg-pm-light border border-pm-secondary/15 rounded-xl p-1 flex shrink-0" aria-label="Tamanho da fonte no relatório">
+                        <div className="bg-pm-light border border-pm-secondary/15 rounded-xl p-1 flex shrink-0 overflow-x-auto" aria-label="Tamanho da fonte no relatório">
                             <button
                                 onClick={() => setFontSize('standard')}
                                 className={`px-3 py-2 rounded-lg text-xs font-black uppercase transition-colors ${fontSize === 'standard' ? 'bg-white text-pm-dark shadow-sm' : 'text-pm-secondary hover:text-pm-dark'}`}
@@ -657,7 +657,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                             </button>
                         </div>
 
-                        <div className="bg-white border border-pm-secondary/15 rounded-xl p-2 flex flex-col sm:flex-row gap-1.5 shrink-0">
+                        <div className="bg-white border border-pm-secondary/15 rounded-xl p-2 flex flex-row overflow-x-auto gap-1.5 shrink-0">
                                 <button
                                     onClick={() => toggleTechnicalSection('showExecutiveSummary')}
                                     className="px-2.5 py-1.5 rounded-lg text-[11px] font-black uppercase flex items-center gap-1.5 text-pm-dark hover:bg-pm-light transition-colors"
@@ -674,7 +674,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                                 </button>
                         </div>
 
-                        <div className="bg-pm-light border border-pm-secondary/15 rounded-xl p-1 flex shrink-0">
+                        <div className="bg-pm-light border border-pm-secondary/15 rounded-xl p-1 flex shrink-0 overflow-x-auto">
                             <button
                                 onClick={() => setReportMode('builder')}
                                 className={`px-3 py-2 rounded-lg text-xs font-black uppercase flex items-center gap-1.5 transition-colors ${reportMode === 'builder' ? 'bg-white text-pm-dark shadow-sm' : 'text-pm-secondary hover:text-pm-dark'}`}
@@ -694,10 +694,10 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
 
                 {reportMode === 'builder' ? (
                 <div
-                    className="grid gap-0 flex-1 min-h-0 overflow-hidden"
+                    className="flex flex-col lg:grid gap-0 flex-1 min-h-0 overflow-y-auto lg:overflow-hidden"
                     style={{ gridTemplateColumns: '340px minmax(0, 1fr)' }}
                 >
-                    <aside className="bg-white border-r border-pm-secondary/15 flex flex-col min-h-0">
+                    <aside className="bg-white border-r border-pm-secondary/15 flex flex-col min-h-[320px] max-h-[48dvh] lg:max-h-none lg:min-h-0">
                         <div className="p-3.5 border-b border-pm-secondary/10">
                             <div className="flex items-center gap-2 mb-3">
                                 <Filter className="w-4 h-4 text-pm-primary" />
@@ -791,7 +791,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                         </div>
                     </aside>
 
-                    <main className="flex flex-col min-h-0">
+                    <main className="flex flex-col min-h-[420px] lg:min-h-0">
                         <div className="p-4 border-b border-pm-secondary/10 bg-[#f8f7f2]">
                             <div className="flex flex-col xl:flex-row xl:items-end justify-between gap-4">
                                 <div>
@@ -1138,8 +1138,8 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                     </div>
                 )}
 
-                <div className="bg-white px-5 py-3.5 border-t border-pm-secondary/15 flex flex-col md:flex-row md:items-center justify-between gap-4 shrink-0">
-                    <div className="flex items-center gap-3">
+                <div className="bg-white px-4 md:px-5 py-3 border-t border-pm-secondary/15 flex flex-col xl:flex-row xl:items-center justify-between gap-3 shrink-0">
+                    <div className="flex items-center gap-3 min-w-0">
                         <span className={`w-9 h-9 rounded-lg flex items-center justify-center ${isPrintable ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
                             <ClipboardCheck className="w-5 h-5" />
                         </span>
@@ -1157,14 +1157,14 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                             )}
                         </div>
                     </div>
-                    <div className="flex gap-3">
-                        <button onClick={onClose} className="px-5 py-2.5 text-sm font-bold text-pm-secondary hover:bg-pm-light rounded-lg transition-colors border border-transparent hover:border-pm-secondary/20">
+                    <div className="grid grid-cols-2 md:flex gap-2 md:gap-3 w-full xl:w-auto">
+                        <button onClick={onClose} className="px-4 md:px-5 py-2.5 text-sm font-bold text-pm-secondary hover:bg-pm-light rounded-lg transition-colors border border-pm-secondary/20 md:border-transparent md:hover:border-pm-secondary/20">
                             Cancelar
                         </button>
                         <button
                             onClick={reloadSavedModel}
                             disabled={isSavingModel || isLoadingSavedModel || isSavingHighlight}
-                            className="px-4 py-2.5 text-sm font-black bg-white text-pm-dark rounded-lg hover:bg-pm-light transition-all border border-pm-secondary/20 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="px-3 md:px-4 py-2.5 text-sm font-black bg-white text-pm-dark rounded-lg hover:bg-pm-light transition-all border border-pm-secondary/20 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             {isLoadingSavedModel ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
                             Carregar modelo global
@@ -1173,7 +1173,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                             <button
                                 onClick={saveReportConfiguration}
                                 disabled={isSavingModel || isLoadingSavedModel || isSavingHighlight}
-                                className="px-5 py-2.5 text-sm font-black bg-white text-pm-dark rounded-lg hover:bg-pm-light transition-all border border-pm-secondary/20 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                className="px-3 md:px-5 py-2.5 text-sm font-black bg-white text-pm-dark rounded-lg hover:bg-pm-light transition-all border border-pm-secondary/20 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 {isSavingModel ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
                                 {isSavingModel ? 'Publicando...' : 'Publicar modelo global'}
@@ -1182,7 +1182,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                         <button
                             onClick={() => setReportMode(reportMode === 'preview' ? 'builder' : 'preview')}
                             disabled={!isPrintable}
-                            className="px-5 py-2.5 text-sm font-black bg-white text-pm-dark rounded-lg hover:bg-pm-light transition-all border border-pm-secondary/20 flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="px-3 md:px-5 py-2.5 text-sm font-black bg-white text-pm-dark rounded-lg hover:bg-pm-light transition-all border border-pm-secondary/20 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             {reportMode === 'preview' ? <SlidersHorizontal className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                             {reportMode === 'preview' ? 'Editar montagem' : 'Ver prévia'}
@@ -1190,16 +1190,16 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                         <button
                             onClick={() => handlePrint()}
                             disabled={!isPrintable}
-                            className="px-6 py-2.5 text-sm font-black bg-pm-primary text-pm-light rounded-lg hover:bg-pm-primary/90 transition-all shadow-md flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                            className="col-span-2 md:col-span-1 px-6 py-3 md:py-2.5 text-sm font-black bg-pm-primary text-pm-light rounded-lg hover:bg-pm-primary/90 transition-all shadow-md flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             <Printer className="w-4 h-4" />
-                            Imprimir PDF
+                            Baixar / Imprimir PDF
                         </button>
                     </div>
                 </div>
             </div>
 
-            <div style={{ display: 'none' }}>
+            <div className="fixed left-[-10000px] top-0 w-[210mm] bg-white pointer-events-none" aria-hidden="true">
                 <div ref={printRef}>
                     <ReportPdfRenderer
                         selectedUnits={selectedUnits}
