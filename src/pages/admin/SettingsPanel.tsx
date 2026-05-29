@@ -26,6 +26,26 @@ type AlertRuleDraft = {
     isActive: boolean;
 };
 
+type ReportEmailFrequency = 'weekly' | 'monthly' | 'specific_date';
+
+type ScheduledReportEmail = {
+    id: string;
+    name: string;
+    isActive: boolean;
+    frequency: ReportEmailFrequency;
+    weekdays: number[];
+    dayOfMonth: number | null;
+    specificDate: string | null;
+    sendTime: string;
+    recipientUserIds: string[];
+    recipientEmails: string[];
+    subject: string;
+    message: string;
+    includeGlobalReportModel: boolean;
+    includeResponsibleSummary: boolean;
+    lastSentAt: string | null;
+};
+
 const WEEKDAYS = [
     { value: 1, label: 'Seg' },
     { value: 2, label: 'Ter' },
@@ -490,7 +510,7 @@ function TabSecurity() {
 
 // ─── Notificações ─────────────────────────────────────────────────────────────
 function TabNotifications() {
-    const { notifications, addNotification, updateNotification, deleteNotification, units, regionalCommands, users, responsibleSectors, unitUpdateAlertRules, refreshData, user } = useAuth();
+    const { notifications, addNotification, updateNotification, deleteNotification, units, dataGroups, fields, entries, fieldValues, regionalCommands, users, responsibleSectors, unitUpdateAlertRules, refreshData, user } = useAuth();
     const { settings, updateSettings } = useSettings();
     const briefingUnits = units.filter(unit => isGeneralBriefingUnit(unit, regionalCommands));
     const updaterOptions = users
@@ -515,6 +535,20 @@ function TabNotifications() {
     const [emailSubject, setEmailSubject] = useState('Mensagem do Sistema Briefing');
     const [emailMessage, setEmailMessage] = useState('');
     const [isSendingTestEmail, setIsSendingTestEmail] = useState(false);
+    const [reportSchedules, setReportSchedules] = useState<ScheduledReportEmail[]>([]);
+    const [scheduleName, setScheduleName] = useState('Relatório semanal de indicadores');
+    const [scheduleFrequency, setScheduleFrequency] = useState<ReportEmailFrequency>('weekly');
+    const [scheduleWeekdays, setScheduleWeekdays] = useState<number[]>([5]);
+    const [scheduleDayOfMonth, setScheduleDayOfMonth] = useState(1);
+    const [scheduleSpecificDate, setScheduleSpecificDate] = useState('');
+    const [scheduleTime, setScheduleTime] = useState('08:00');
+    const [scheduleRecipientUserIds, setScheduleRecipientUserIds] = useState<string[]>([]);
+    const [scheduleManualRecipients, setScheduleManualRecipients] = useState('');
+    const [scheduleSubject, setScheduleSubject] = useState('Relatório de Indicadores - Sistema Briefing');
+    const [scheduleMessage, setScheduleMessage] = useState('Segue relatório de indicadores com setores responsáveis e usuários vinculados.');
+    const [includeResponsibleSummary, setIncludeResponsibleSummary] = useState(true);
+    const [isSavingReportSchedule, setIsSavingReportSchedule] = useState(false);
+    const [isSendingReportSchedule, setIsSendingReportSchedule] = useState(false);
     const [newSectorName, setNewSectorName] = useState('');
     const [alertRuleDrafts, setAlertRuleDrafts] = useState<AlertRuleDraft[]>([]);
     const [isSaving, setIsSaving] = useState(false);
@@ -532,6 +566,42 @@ function TabNotifications() {
     useEffect(() => {
         setTestEmailTo(user?.email || '');
     }, [user?.email]);
+
+    useEffect(() => {
+        const loadReportSchedules = async () => {
+            const { data, error } = await supabase
+                .from('scheduled_report_emails')
+                .select('*')
+                .order('created_at', { ascending: false });
+
+            if (error) {
+                console.error('Erro ao carregar agendamentos de relatório:', error);
+                return;
+            }
+
+            setReportSchedules((data || []).map(item => ({
+                id: item.id,
+                name: item.name,
+                isActive: item.is_active,
+                frequency: item.frequency,
+                weekdays: item.weekdays || [5],
+                dayOfMonth: item.day_of_month ?? null,
+                specificDate: item.specific_date ?? null,
+                sendTime: item.send_time?.slice(0, 5) || '08:00',
+                recipientUserIds: item.recipient_user_ids || [],
+                recipientEmails: item.recipient_emails || [],
+                subject: item.subject,
+                message: item.message || '',
+                includeGlobalReportModel: item.include_global_report_model,
+                includeResponsibleSummary: item.include_responsible_summary,
+                lastSentAt: item.last_sent_at ?? null
+            })));
+        };
+
+        if (user?.role === 'admin') {
+            loadReportSchedules();
+        }
+    }, [user?.role]);
 
     const emailRecipientOptions = [
         { value: 'self', label: 'Meu e-mail' },
@@ -559,6 +629,118 @@ function TabNotifications() {
     };
 
     const selectedEmailRecipients = Array.from(new Set(getSelectedRecipients()));
+
+    const getManualReportRecipients = () => scheduleManualRecipients
+        .split(/[\n,;]+/)
+        .map(email => email.trim())
+        .filter(Boolean);
+
+    const getScheduleRecipients = (schedule?: ScheduledReportEmail) => {
+        const userIds = schedule?.recipientUserIds ?? scheduleRecipientUserIds;
+        const manualEmails = schedule?.recipientEmails ?? getManualReportRecipients();
+        const userEmails = users
+            .filter(candidate => userIds.includes(candidate.id))
+            .map(candidate => candidate.email?.trim())
+            .filter((email): email is string => Boolean(email) && email.includes('@'));
+
+        return Array.from(new Set([...userEmails, ...manualEmails]));
+    };
+
+    const buildReportEmailHtml = async (schedule?: ScheduledReportEmail) => {
+        const { data, error } = await supabase
+            .from('global_report_configurations')
+            .select('configuration')
+            .eq('id', 'general')
+            .maybeSingle();
+
+        if (error) throw error;
+
+        const configuration = (data?.configuration || {}) as {
+            selectedUnits?: string[];
+            selectedGroups?: string[];
+            groupOrder?: string[];
+            unitOrder?: string[];
+        };
+        const selectedUnitIds = Array.isArray(configuration.selectedUnits) ? configuration.selectedUnits : briefingUnits.map(unit => unit.id);
+        const selectedGroupIds = Array.isArray(configuration.selectedGroups) ? configuration.selectedGroups : dataGroups.map(group => group.id);
+        const unitOrder = Array.isArray(configuration.unitOrder) ? configuration.unitOrder : [];
+        const groupOrder = Array.isArray(configuration.groupOrder) ? configuration.groupOrder : [];
+        const activeUnits = briefingUnits
+            .filter(unit => selectedUnitIds.includes(unit.id))
+            .sort((left, right) => {
+                const leftIndex = unitOrder.indexOf(left.id);
+                const rightIndex = unitOrder.indexOf(right.id);
+                return (leftIndex >= 0 ? leftIndex : 9999) - (rightIndex >= 0 ? rightIndex : 9999)
+                    || compareTextPtBr(left.name, right.name);
+            });
+
+        const formatValue = (value: unknown, fieldType?: string) => {
+            if (value === null || value === undefined || value === '') return '-';
+            if (fieldType === 'currency') return Number(value).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+            if (fieldType === 'percentage') return `${Number(value).toLocaleString('pt-BR')}%`;
+            if (typeof value === 'number') return value.toLocaleString('pt-BR');
+            return String(value);
+        };
+
+        const rows = activeUnits.flatMap(unit => {
+            const unitGroups = dataGroups
+                .filter(group => group.unitId === unit.id && selectedGroupIds.includes(group.id))
+                .sort((left, right) => {
+                    const leftIndex = groupOrder.indexOf(left.id);
+                    const rightIndex = groupOrder.indexOf(right.id);
+                    return (leftIndex >= 0 ? leftIndex : 9999) - (rightIndex >= 0 ? rightIndex : 9999) || left.order - right.order;
+                });
+
+            return unitGroups.flatMap(group => {
+                const entry = entries
+                    .filter(candidate => candidate.unitId === unit.id && candidate.dataGroupId === group.id)
+                    .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())[0];
+                const entryValues = entry ? fieldValues.filter(value => value.entryId === entry.id) : [];
+                const activeFields = fields.filter(field => field.dataGroupId === group.id && field.isActive && field.type !== 'image').sort((left, right) => left.order - right.order);
+
+                return activeFields.map(field => {
+                    const fieldValue = entryValues.find(value => value.fieldId === field.id);
+                    return {
+                        unit: unit.name,
+                        group: group.title,
+                        field: field.name,
+                        value: formatValue(fieldValue?.value, field.type),
+                        updatedAt: entry?.updatedAt ? new Date(entry.updatedAt).toLocaleString('pt-BR') : 'Sem atualização',
+                        sector: unit.responsibleSector || responsibleSectors.find(sector => sector.id === unit.responsibleSectorId)?.name || '-',
+                        responsible: users.find(candidate => candidate.id === unit.responsibleUpdaterId)?.email || users.find(candidate => candidate.id === unit.responsibleUpdaterId)?.name || '-'
+                    };
+                });
+            });
+        });
+
+        const responsibleRows = activeUnits.map(unit => ({
+            unit: unit.name,
+            sector: unit.responsibleSector || responsibleSectors.find(sector => sector.id === unit.responsibleSectorId)?.name || '-',
+            responsible: users.find(candidate => candidate.id === unit.responsibleUpdaterId)?.email || users.find(candidate => candidate.id === unit.responsibleUpdaterId)?.name || '-'
+        }));
+
+        const message = schedule?.message ?? scheduleMessage;
+        const includeResponsibles = schedule?.includeResponsibleSummary ?? includeResponsibleSummary;
+
+        return `
+            <div style="font-family: Arial, sans-serif; color: #172033; line-height: 1.45;">
+                <h2 style="margin: 0 0 8px;">${schedule?.subject ?? scheduleSubject}</h2>
+                <p style="margin: 0 0 18px;">${message.replace(/\n/g, '<br />')}</p>
+                ${includeResponsibles ? `
+                    <h3 style="margin: 22px 0 8px;">Setores e responsáveis</h3>
+                    <table style="border-collapse: collapse; width: 100%; font-size: 13px;">
+                        <thead><tr><th align="left" style="border:1px solid #d8dee8;padding:8px;">Tópico</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Setor</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Responsável</th></tr></thead>
+                        <tbody>${responsibleRows.map(row => `<tr><td style="border:1px solid #d8dee8;padding:8px;">${row.unit}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.sector}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.responsible}</td></tr>`).join('')}</tbody>
+                    </table>
+                ` : ''}
+                <h3 style="margin: 22px 0 8px;">Indicadores do modelo predefinido</h3>
+                <table style="border-collapse: collapse; width: 100%; font-size: 12px;">
+                    <thead><tr><th align="left" style="border:1px solid #d8dee8;padding:8px;">Tópico</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Seção</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Indicador</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Valor</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Atualização</th></tr></thead>
+                    <tbody>${rows.length > 0 ? rows.map(row => `<tr><td style="border:1px solid #d8dee8;padding:8px;">${row.unit}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.group}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.field}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.value}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.updatedAt}</td></tr>`).join('') : '<tr><td colspan="5" style="border:1px solid #d8dee8;padding:8px;">Nenhum indicador encontrado no modelo.</td></tr>'}</tbody>
+                </table>
+            </div>
+        `;
+    };
 
     useEffect(() => {
         setAlertRuleDrafts(sortByTextPtBr(briefingUnits, unit => unit.name).map(unit => {
@@ -701,6 +883,117 @@ function TabNotifications() {
             alert(`Erro ao enviar e-mail. ${error instanceof Error ? error.message : ''}`);
         } finally {
             setIsSendingTestEmail(false);
+        }
+    };
+
+    const handleToggleScheduleWeekday = (weekday: number) => {
+        setScheduleWeekdays(previous => previous.includes(weekday)
+            ? previous.filter(day => day !== weekday)
+            : [...previous, weekday]);
+    };
+
+    const handleToggleScheduleRecipient = (userId: string) => {
+        setScheduleRecipientUserIds(previous => previous.includes(userId)
+            ? previous.filter(id => id !== userId)
+            : [...previous, userId]);
+    };
+
+    const handleSaveReportSchedule = async () => {
+        const recipientEmails = getManualReportRecipients();
+        if (!scheduleName.trim()) {
+            alert('Informe o nome do agendamento.');
+            return;
+        }
+        if (scheduleRecipientUserIds.length === 0 && recipientEmails.length === 0) {
+            alert('Escolha pelo menos um usuário ou e-mail manual.');
+            return;
+        }
+        if (scheduleFrequency === 'weekly' && scheduleWeekdays.length === 0) {
+            alert('Escolha pelo menos um dia da semana.');
+            return;
+        }
+        if (scheduleFrequency === 'specific_date' && !scheduleSpecificDate) {
+            alert('Escolha a data específica do envio.');
+            return;
+        }
+
+        setIsSavingReportSchedule(true);
+        try {
+            const { error } = await supabase.from('scheduled_report_emails').insert({
+                name: scheduleName.trim(),
+                frequency: scheduleFrequency,
+                weekdays: scheduleWeekdays.sort((left, right) => left - right),
+                day_of_month: scheduleFrequency === 'monthly' ? scheduleDayOfMonth : null,
+                specific_date: scheduleFrequency === 'specific_date' ? scheduleSpecificDate : null,
+                send_time: scheduleTime,
+                recipient_user_ids: scheduleRecipientUserIds,
+                recipient_emails: recipientEmails,
+                subject: scheduleSubject.trim(),
+                message: scheduleMessage.trim(),
+                include_global_report_model: true,
+                include_responsible_summary: includeResponsibleSummary,
+                created_by: user?.id,
+                updated_by: user?.id
+            });
+            if (error) throw error;
+
+            const { data, error: loadError } = await supabase.from('scheduled_report_emails').select('*').order('created_at', { ascending: false });
+            if (loadError) throw loadError;
+            setReportSchedules((data || []).map(item => ({
+                id: item.id,
+                name: item.name,
+                isActive: item.is_active,
+                frequency: item.frequency,
+                weekdays: item.weekdays || [5],
+                dayOfMonth: item.day_of_month ?? null,
+                specificDate: item.specific_date ?? null,
+                sendTime: item.send_time?.slice(0, 5) || '08:00',
+                recipientUserIds: item.recipient_user_ids || [],
+                recipientEmails: item.recipient_emails || [],
+                subject: item.subject,
+                message: item.message || '',
+                includeGlobalReportModel: item.include_global_report_model,
+                includeResponsibleSummary: item.include_responsible_summary,
+                lastSentAt: item.last_sent_at ?? null
+            })));
+            alert('Agendamento de relatório salvo.');
+        } catch (error) {
+            console.error(error);
+            alert(`Erro ao salvar agendamento. ${error instanceof Error ? error.message : ''}`);
+        } finally {
+            setIsSavingReportSchedule(false);
+        }
+    };
+
+    const handleSendReportNow = async (schedule?: ScheduledReportEmail) => {
+        const recipients = getScheduleRecipients(schedule);
+        if (recipients.length === 0) {
+            alert('Nenhum destinatário válido encontrado para este relatório.');
+            return;
+        }
+        if (recipients.length > 50) {
+            alert('O envio está limitado a 50 destinatários por vez.');
+            return;
+        }
+
+        setIsSendingReportSchedule(true);
+        try {
+            const html = await buildReportEmailHtml(schedule);
+            await sendSystemEmail({
+                to: recipients,
+                subject: schedule?.subject || scheduleSubject,
+                text: schedule?.message || scheduleMessage,
+                html
+            });
+            if (schedule) {
+                await supabase.from('scheduled_report_emails').update({ last_sent_at: new Date().toISOString(), updated_by: user?.id }).eq('id', schedule.id);
+            }
+            alert(`Relatório enviado para ${recipients.length} destinatário(s).`);
+        } catch (error) {
+            console.error(error);
+            alert(`Erro ao enviar relatório. ${error instanceof Error ? error.message : ''}`);
+        } finally {
+            setIsSendingReportSchedule(false);
         }
     };
 
@@ -951,6 +1244,121 @@ function TabNotifications() {
                     {isSendingTestEmail ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Bell className="w-4 h-4" />}
                     {isSendingTestEmail ? 'Enviando...' : 'Enviar Mensagem'}
                 </button>
+            </div>
+
+            {/* Agendamento de relatórios */}
+            <div className="bg-white p-6 rounded-xl shadow-sm border border-pm-secondary/20">
+                <h3 className="font-bold text-pm-dark border-b border-pm-secondary/10 pb-3 mb-4">Envio de Relatórios por E-mail</h3>
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                    <div className="lg:col-span-2">
+                        <label className="block text-sm font-medium text-pm-dark mb-1">Nome do Agendamento</label>
+                        <input value={scheduleName} onChange={event => setScheduleName(event.target.value)}
+                            className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none" />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-pm-dark mb-1">Horário</label>
+                        <input type="time" value={scheduleTime} onChange={event => setScheduleTime(event.target.value)}
+                            className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none" />
+                    </div>
+                    <div>
+                        <label className="block text-sm font-medium text-pm-dark mb-1">Recorrência</label>
+                        <select value={scheduleFrequency} onChange={event => setScheduleFrequency(event.target.value as ReportEmailFrequency)}
+                            className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none bg-white">
+                            <option value="weekly">Semanal</option>
+                            <option value="monthly">Mensal</option>
+                            <option value="specific_date">Data específica</option>
+                        </select>
+                    </div>
+                    {scheduleFrequency === 'weekly' && (
+                        <div className="lg:col-span-2">
+                            <label className="block text-sm font-medium text-pm-dark mb-1">Dias da Semana</label>
+                            <div className="flex flex-wrap gap-2">
+                                {WEEKDAYS.map(day => (
+                                    <button key={day.value} type="button" onClick={() => handleToggleScheduleWeekday(day.value)}
+                                        className={`px-3 py-2 rounded-lg text-xs font-bold border ${scheduleWeekdays.includes(day.value) ? 'bg-pm-primary text-white border-pm-primary' : 'bg-white text-pm-dark border-pm-secondary/20'}`}>
+                                        {day.label}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    {scheduleFrequency === 'monthly' && (
+                        <div>
+                            <label className="block text-sm font-medium text-pm-dark mb-1">Dia do Mês</label>
+                            <input type="number" min={1} max={31} value={scheduleDayOfMonth} onChange={event => setScheduleDayOfMonth(Number(event.target.value))}
+                                className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none" />
+                        </div>
+                    )}
+                    {scheduleFrequency === 'specific_date' && (
+                        <div>
+                            <label className="block text-sm font-medium text-pm-dark mb-1">Data do Envio</label>
+                            <input type="date" value={scheduleSpecificDate} onChange={event => setScheduleSpecificDate(event.target.value)}
+                                className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none" />
+                        </div>
+                    )}
+                    <div className="lg:col-span-3">
+                        <label className="block text-sm font-medium text-pm-dark mb-1">Usuários Destinatários</label>
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2 max-h-52 overflow-y-auto border border-pm-secondary/20 rounded-lg p-3">
+                            {updaterOptions.map(option => (
+                                <label key={option.id} className="flex items-center gap-2 text-xs text-pm-dark">
+                                    <input type="checkbox" checked={scheduleRecipientUserIds.includes(option.id)} onChange={() => handleToggleScheduleRecipient(option.id)} />
+                                    <span className="truncate">{option.email || option.name}</span>
+                                </label>
+                            ))}
+                        </div>
+                    </div>
+                    <div className="lg:col-span-3">
+                        <label className="block text-sm font-medium text-pm-dark mb-1">E-mails Manuais</label>
+                        <textarea value={scheduleManualRecipients} onChange={event => setScheduleManualRecipients(event.target.value)}
+                            rows={2} placeholder="email1@dominio.com, email2@dominio.com"
+                            className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none resize-none" />
+                    </div>
+                    <div className="lg:col-span-3">
+                        <label className="block text-sm font-medium text-pm-dark mb-1">Assunto</label>
+                        <input value={scheduleSubject} onChange={event => setScheduleSubject(event.target.value)}
+                            className="w-full border border-pm-secondary/30 rounded-lg px-4 py-2 text-sm focus:ring-2 focus:ring-pm-primary outline-none" />
+                    </div>
+                    <div className="lg:col-span-3">
+                        <label className="block text-sm font-medium text-pm-dark mb-1">Mensagem de Abertura</label>
+                        <textarea value={scheduleMessage} onChange={event => setScheduleMessage(event.target.value)}
+                            rows={3} className="w-full border border-pm-secondary/30 rounded-lg px-4 py-3 text-sm focus:ring-2 focus:ring-pm-primary outline-none resize-none" />
+                    </div>
+                    <label className="lg:col-span-3 flex items-center gap-2 text-sm text-pm-dark">
+                        <input type="checkbox" checked={includeResponsibleSummary} onChange={event => setIncludeResponsibleSummary(event.target.checked)} />
+                        Incluir resumo de setores responsáveis e nomes/e-mails dos responsáveis
+                    </label>
+                </div>
+                <div className="flex flex-wrap gap-2 mt-4">
+                    <button onClick={handleSaveReportSchedule} disabled={isSavingReportSchedule}
+                        className="px-4 py-2 rounded-lg text-sm font-bold bg-pm-primary text-white disabled:opacity-60 flex items-center gap-2">
+                        {isSavingReportSchedule ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                        Salvar Agendamento
+                    </button>
+                    <button onClick={() => handleSendReportNow()} disabled={isSendingReportSchedule}
+                        className="px-4 py-2 rounded-lg text-sm font-bold border border-pm-secondary/30 text-pm-dark disabled:opacity-60 flex items-center gap-2">
+                        {isSendingReportSchedule ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                        Enviar Relatório Agora
+                    </button>
+                </div>
+
+                {reportSchedules.length > 0 && (
+                    <div className="mt-6 border-t border-pm-secondary/10 pt-4 space-y-2">
+                        {reportSchedules.map(schedule => (
+                            <div key={schedule.id} className="flex flex-col md:flex-row md:items-center justify-between gap-3 border border-pm-secondary/10 rounded-lg p-3">
+                                <div>
+                                    <p className="text-sm font-bold text-pm-dark">{schedule.name}</p>
+                                    <p className="text-xs text-pm-secondary">
+                                        {schedule.frequency === 'weekly' ? `Semanal: ${schedule.weekdays.map(day => WEEKDAYS.find(item => item.value === day)?.label).join(', ')}` : schedule.frequency === 'monthly' ? `Mensal: dia ${schedule.dayOfMonth}` : `Data: ${schedule.specificDate}`} às {schedule.sendTime} • {getScheduleRecipients(schedule).length} destinatário(s)
+                                    </p>
+                                </div>
+                                <button onClick={() => handleSendReportNow(schedule)} disabled={isSendingReportSchedule}
+                                    className="px-3 py-2 rounded-lg text-xs font-bold border border-pm-secondary/30 text-pm-dark flex items-center gap-2">
+                                    <Send className="w-3.5 h-3.5" /> Enviar agora
+                                </button>
+                            </div>
+                        ))}
+                    </div>
+                )}
             </div>
 
             {/* Setores responsáveis */}
