@@ -11,14 +11,13 @@ import {
     Eye,
     FileText,
     Filter,
+    Download,
     Layers3,
     ListChecks,
     Loader2,
     Plus,
     Printer,
-    Save,
     Search,
-    SlidersHorizontal,
     Square,
     X
 } from 'lucide-react';
@@ -102,7 +101,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
     const [groupAssignments, setGroupAssignments] = useState<Record<string, string>>({});
     const [newCategoryName, setNewCategoryName] = useState('');
     const [searchTerm, setSearchTerm] = useState('');
-    const [reportMode, setReportMode] = useState<'builder' | 'preview'>('builder');
+    const effectiveReportMode = 'preview' as 'builder' | 'preview';
     const [fontSize, setFontSize] = useState<'standard' | 'large'>('standard');
     const [technicalSections, setTechnicalSections] = useState({
         showExecutiveSummary: true,
@@ -115,13 +114,23 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
     const [highlightColumn, setHighlightColumn] = useState(1);
     const [highlightColor, setHighlightColor] = useState<ReportHighlightColor>('khaki');
     const [isSavingHighlight, setIsSavingHighlight] = useState(false);
-    const [isLoadingSavedModel, setIsLoadingSavedModel] = useState(false);
-    const [isSavingModel, setIsSavingModel] = useState(false);
+    const [, setIsLoadingSavedModel] = useState(false);
+    const [, setIsSavingModel] = useState(false);
+    const [isGeneratingPdf, setIsGeneratingPdf] = useState(false);
+    const [isMobile, setIsMobile] = useState(false);
     const [modelMessage, setModelMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
     const [modelReloadRequest, setModelReloadRequest] = useState(0);
 
     const printRef = useRef<HTMLDivElement>(null);
     const loadedConfigurationUserId = useRef<string | null>(null);
+
+    useEffect(() => {
+        const mediaQuery = window.matchMedia('(max-width: 767px)');
+        const updateIsMobile = () => setIsMobile(mediaQuery.matches);
+        updateIsMobile();
+        mediaQuery.addEventListener('change', updateIsMobile);
+        return () => mediaQuery.removeEventListener('change', updateIsMobile);
+    }, []);
 
     useEffect(() => {
         let isActive = true;
@@ -242,6 +251,49 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
         contentRef: printRef,
         documentTitle: `Briefing Geral PMBA - ${new Date().toISOString().split('T')[0]}`
     });
+
+    const handleDownloadPdf = async () => {
+        if (!isPrintable || !printRef.current) return;
+
+        setIsGeneratingPdf(true);
+        try {
+            const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
+                import('html2canvas'),
+                import('jspdf')
+            ]);
+            const canvas = await html2canvas(printRef.current, {
+                scale: 2,
+                useCORS: true,
+                backgroundColor: '#ffffff',
+                windowWidth: printRef.current.scrollWidth
+            });
+            const pdf = new jsPDF('p', 'mm', 'a4');
+            const pageWidth = pdf.internal.pageSize.getWidth();
+            const pageHeight = pdf.internal.pageSize.getHeight();
+            const imgWidth = pageWidth;
+            const imgHeight = (canvas.height * imgWidth) / canvas.width;
+            const imgData = canvas.toDataURL('image/png');
+
+            let remainingHeight = imgHeight;
+            let position = 0;
+            pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+            remainingHeight -= pageHeight;
+
+            while (remainingHeight > 0) {
+                position = remainingHeight - imgHeight;
+                pdf.addPage();
+                pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+                remainingHeight -= pageHeight;
+            }
+
+            pdf.save(`Briefing-Geral-PMBA-${new Date().toISOString().split('T')[0]}.pdf`);
+        } catch (error) {
+            console.error('Falha ao gerar PDF:', error);
+            alert('Não foi possível baixar o PDF neste dispositivo. Tente novamente ou use a versão desktop.');
+        } finally {
+            setIsGeneratingPdf(false);
+        }
+    };
 
     const appendGroupsToOrder = (groupIds: string[]) => {
         setGroupOrder(prev => [...prev, ...groupIds.filter(id => !prev.includes(id))]);
@@ -461,6 +513,11 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
     const collectionCount = selectedGroupObjects.filter(group => group.mode === 'collection').length;
     const snapshotCount = selectedGroupObjects.length - collectionCount;
     const isPrintable = selectedUnits.length > 0 && selectedGroups.length > 0;
+    useEffect(() => {
+        if (isMobile) {
+            setFontSize('large');
+        }
+    }, [isMobile]);
     const sharedReportConfig = {
         groupAssignments,
         categoryOrder: reportCategories,
@@ -592,6 +649,10 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
         }
     };
 
+    void reloadSavedModel;
+    void toggleTechnicalSection;
+    void saveReportConfiguration;
+
     return (
         <div className="fixed inset-0 bg-pm-dark/70 backdrop-blur-sm z-50 flex items-stretch md:items-center justify-center p-0 md:p-4">
             <div className="bg-[#f8f7f2] rounded-none md:rounded-2xl shadow-2xl w-full max-w-[96vw] h-[100dvh] md:h-[94vh] border border-white/70 flex flex-col overflow-hidden">
@@ -615,7 +676,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                     </div>
 
                     <div className="flex flex-col lg:flex-row lg:flex-wrap 2xl:flex-nowrap lg:items-end justify-between gap-3 md:gap-4 mt-3 md:mt-4">
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2 flex-1">
+                        <div className="hidden md:grid grid-cols-2 md:grid-cols-4 gap-2 flex-1">
                         <div className="bg-[#ede7d2] border border-[#d7ca9a] rounded-lg px-3 py-2.5">
                             <span className="text-[10px] uppercase tracking-widest font-black text-pm-secondary flex items-center gap-1.5">
                                 <Building2 className="w-3.5 h-3.5" /> Tópicos
@@ -645,7 +706,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                         <div className="bg-pm-light border border-pm-secondary/15 rounded-xl p-1 flex shrink-0 overflow-x-auto" aria-label="Tamanho da fonte no relatório">
                             <button
                                 onClick={() => setFontSize('standard')}
-                                className={`px-3 py-2 rounded-lg text-xs font-black uppercase transition-colors ${fontSize === 'standard' ? 'bg-white text-pm-dark shadow-sm' : 'text-pm-secondary hover:text-pm-dark'}`}
+                                className={`hidden md:block px-3 py-2 rounded-lg text-xs font-black uppercase transition-colors ${fontSize === 'standard' ? 'bg-white text-pm-dark shadow-sm' : 'text-pm-secondary hover:text-pm-dark'}`}
                             >
                                 Fonte padrão
                             </button>
@@ -657,42 +718,18 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                             </button>
                         </div>
 
-                        <div className="bg-white border border-pm-secondary/15 rounded-xl p-2 flex flex-row overflow-x-auto gap-1.5 shrink-0">
-                                <button
-                                    onClick={() => toggleTechnicalSection('showExecutiveSummary')}
-                                    className="px-2.5 py-1.5 rounded-lg text-[11px] font-black uppercase flex items-center gap-1.5 text-pm-dark hover:bg-pm-light transition-colors"
-                                >
-                                    {technicalSections.showExecutiveSummary ? <CheckSquare className="w-3.5 h-3.5 text-pm-primary" /> : <Square className="w-3.5 h-3.5 text-pm-secondary" />}
-                                    Resumo executivo
-                                </button>
-                                <button
-                                    onClick={() => toggleTechnicalSection('showSubjectMap')}
-                                    className="px-2.5 py-1.5 rounded-lg text-[11px] font-black uppercase flex items-center gap-1.5 text-pm-dark hover:bg-pm-light transition-colors"
-                                >
-                                    {technicalSections.showSubjectMap ? <CheckSquare className="w-3.5 h-3.5 text-pm-primary" /> : <Square className="w-3.5 h-3.5 text-pm-secondary" />}
-                                    Mapa de assuntos
-                                </button>
-                        </div>
-
                         <div className="bg-pm-light border border-pm-secondary/15 rounded-xl p-1 flex shrink-0 overflow-x-auto">
                             <button
-                                onClick={() => setReportMode('builder')}
-                                className={`px-3 py-2 rounded-lg text-xs font-black uppercase flex items-center gap-1.5 transition-colors ${reportMode === 'builder' ? 'bg-white text-pm-dark shadow-sm' : 'text-pm-secondary hover:text-pm-dark'}`}
-                            >
-                                <SlidersHorizontal className="w-3.5 h-3.5" /> Montagem
-                            </button>
-                            <button
-                                onClick={() => setReportMode('preview')}
                                 disabled={!isPrintable}
-                                className={`px-3 py-2 rounded-lg text-xs font-black uppercase flex items-center gap-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${reportMode === 'preview' ? 'bg-white text-pm-dark shadow-sm' : 'text-pm-secondary hover:text-pm-dark'}`}
+                                className={`px-3 py-2 rounded-lg text-xs font-black uppercase flex items-center gap-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${effectiveReportMode === 'preview' ? 'bg-white text-pm-dark shadow-sm' : 'text-pm-secondary hover:text-pm-dark'}`}
                             >
-                                <Eye className="w-3.5 h-3.5" /> Prévia A4
+                                <Eye className="w-3.5 h-3.5" /> Prévia
                             </button>
                         </div>
                     </div>
                 </div>
 
-                {reportMode === 'builder' ? (
+                {effectiveReportMode === 'builder' ? (
                 <div
                     className="flex flex-col lg:grid gap-0 flex-1 min-h-0 overflow-y-auto lg:overflow-hidden"
                     style={{ gridTemplateColumns: '340px minmax(0, 1fr)' }}
@@ -1112,9 +1149,9 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                 </div>
                 ) : (
                     <div className="flex-1 min-h-0 overflow-hidden bg-[#dedbd1]">
-                        <div className="h-full overflow-auto custom-scrollbar p-4 md:p-6">
+                        <div className="h-full overflow-auto custom-scrollbar p-2 sm:p-4 md:p-6">
                             {isPrintable ? (
-                                <div className="mx-auto bg-white shadow-2xl ring-1 ring-black/10 origin-top report-preview-sheet w-[210mm] min-h-[297mm]">
+                                <div className="mx-auto bg-white shadow-2xl ring-1 ring-black/10 origin-top report-preview-sheet w-full max-w-[210mm] md:w-[210mm] min-h-[70vh] md:min-h-[297mm] overflow-hidden">
                                     <ReportPdfRenderer
                                         selectedUnits={selectedUnits}
                                         selectedGroups={selectedGroups}
@@ -1139,7 +1176,7 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                 )}
 
                 <div className="bg-white px-4 md:px-5 py-3 border-t border-pm-secondary/15 flex flex-col xl:flex-row xl:items-center justify-between gap-3 shrink-0">
-                    <div className="flex items-center gap-3 min-w-0">
+                    <div className="hidden md:flex items-center gap-3 min-w-0">
                         <span className={`w-9 h-9 rounded-lg flex items-center justify-center ${isPrintable ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
                             <ClipboardCheck className="w-5 h-5" />
                         </span>
@@ -1157,43 +1194,17 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
                             )}
                         </div>
                     </div>
-                    <div className="grid grid-cols-2 md:flex gap-2 md:gap-3 w-full xl:w-auto">
-                        <button onClick={onClose} className="px-4 md:px-5 py-2.5 text-sm font-bold text-pm-secondary hover:bg-pm-light rounded-lg transition-colors border border-pm-secondary/20 md:border-transparent md:hover:border-pm-secondary/20">
+                    <div className="grid grid-cols-1 md:flex gap-2 md:gap-3 w-full xl:w-auto">
+                        <button onClick={onClose} className="hidden md:block px-4 md:px-5 py-2.5 text-sm font-bold text-pm-secondary hover:bg-pm-light rounded-lg transition-colors border border-pm-secondary/20 md:border-transparent md:hover:border-pm-secondary/20">
                             Cancelar
                         </button>
                         <button
-                            onClick={reloadSavedModel}
-                            disabled={isSavingModel || isLoadingSavedModel || isSavingHighlight}
-                            className="px-3 md:px-4 py-2.5 text-sm font-black bg-white text-pm-dark rounded-lg hover:bg-pm-light transition-all border border-pm-secondary/20 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                            onClick={() => isMobile ? handleDownloadPdf() : handlePrint()}
+                            disabled={!isPrintable || isGeneratingPdf}
+                            className="px-6 py-3 md:py-2.5 text-sm font-black bg-pm-primary text-pm-light rounded-lg hover:bg-pm-primary/90 transition-all shadow-md flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                         >
-                            {isLoadingSavedModel ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileText className="w-4 h-4" />}
-                            Carregar modelo global
-                        </button>
-                        {canManageGlobalModel && (
-                            <button
-                                onClick={saveReportConfiguration}
-                                disabled={isSavingModel || isLoadingSavedModel || isSavingHighlight}
-                                className="px-3 md:px-5 py-2.5 text-sm font-black bg-white text-pm-dark rounded-lg hover:bg-pm-light transition-all border border-pm-secondary/20 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                {isSavingModel ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                                {isSavingModel ? 'Publicando...' : 'Publicar modelo global'}
-                            </button>
-                        )}
-                        <button
-                            onClick={() => setReportMode(reportMode === 'preview' ? 'builder' : 'preview')}
-                            disabled={!isPrintable}
-                            className="px-3 md:px-5 py-2.5 text-sm font-black bg-white text-pm-dark rounded-lg hover:bg-pm-light transition-all border border-pm-secondary/20 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                            {reportMode === 'preview' ? <SlidersHorizontal className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                            {reportMode === 'preview' ? 'Editar montagem' : 'Ver prévia'}
-                        </button>
-                        <button
-                            onClick={() => handlePrint()}
-                            disabled={!isPrintable}
-                            className="col-span-2 md:col-span-1 px-6 py-3 md:py-2.5 text-sm font-black bg-pm-primary text-pm-light rounded-lg hover:bg-pm-primary/90 transition-all shadow-md flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                            <Printer className="w-4 h-4" />
-                            Baixar / Imprimir PDF
+                            {isGeneratingPdf ? <Loader2 className="w-4 h-4 animate-spin" /> : isMobile ? <Download className="w-4 h-4" /> : <Printer className="w-4 h-4" />}
+                            {isMobile ? (isGeneratingPdf ? 'Gerando PDF...' : 'Baixar PDF') : 'Baixar / Imprimir PDF'}
                         </button>
                     </div>
                 </div>
