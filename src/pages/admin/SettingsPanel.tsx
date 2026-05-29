@@ -46,6 +46,11 @@ type ScheduledReportEmail = {
     lastSentAt: string | null;
 };
 
+type NotificationChannelSetting = {
+    id: string;
+    enabled: boolean;
+};
+
 const WEEKDAYS = [
     { value: 1, label: 'Seg' },
     { value: 2, label: 'Ter' },
@@ -549,6 +554,8 @@ function TabNotifications() {
     const [includeResponsibleSummary, setIncludeResponsibleSummary] = useState(true);
     const [isSavingReportSchedule, setIsSavingReportSchedule] = useState(false);
     const [isSendingReportSchedule, setIsSendingReportSchedule] = useState(false);
+    const [channelSettings, setChannelSettings] = useState<NotificationChannelSetting[]>([]);
+    const [savingChannelId, setSavingChannelId] = useState<string | null>(null);
     const [newSectorName, setNewSectorName] = useState('');
     const [alertRuleDrafts, setAlertRuleDrafts] = useState<AlertRuleDraft[]>([]);
     const [isSaving, setIsSaving] = useState(false);
@@ -560,6 +567,7 @@ function TabNotifications() {
             setSmtpUser(settings.smtp_user || '');
             setSmtpPass(settings.smtp_pass || '');
             setSmtpFrom(settings.smtp_from || 'noreply@briefing.pmdabahia.com.br');
+            setChannelSettings(Array.isArray(settings.notification_channels) ? settings.notification_channels : []);
         }
     }, [settings]);
 
@@ -1017,12 +1025,35 @@ function TabNotifications() {
         }
     };
 
-    const channels = [
+    const defaultChannels = [
         { id: 'email_daily', label: 'Resumo Diário por E-mail', description: 'Envia às 07h um resumo dos indicadores de todas as unidades', channel: 'E-mail', enabled: true },
         { id: 'email_alert', label: 'Alertas de Pendências', description: 'Notifica Editores com dados não preenchidos após prazo', channel: 'E-mail', enabled: true },
         { id: 'email_new_user', label: 'Novo Usuário Criado', description: 'Notifica o Admin quando um novo usuário é cadastrado', channel: 'E-mail', enabled: false },
         { id: 'email_report', label: 'Relatório Gerado', description: 'Notifica quando um PDF é exportado pelo Comandante', channel: 'E-mail', enabled: false },
     ];
+    const channels = defaultChannels.map(channel => ({
+        ...channel,
+        enabled: channelSettings.find(setting => setting.id === channel.id)?.enabled ?? channel.enabled
+    }));
+
+    const handleToggleChannel = async (channelId: string, enabled: boolean) => {
+        const nextSettings = [
+            ...channelSettings.filter(setting => setting.id !== channelId),
+            { id: channelId, enabled }
+        ];
+
+        setChannelSettings(nextSettings);
+        setSavingChannelId(channelId);
+        try {
+            await updateSettings({ notification_channels: nextSettings });
+        } catch (error) {
+            console.error(error);
+            alert(`Não foi possível salvar o canal de notificação. ${error instanceof Error ? error.message : ''}`);
+            setChannelSettings(Array.isArray(settings?.notification_channels) ? settings.notification_channels : []);
+        } finally {
+            setSavingChannelId(null);
+        }
+    };
 
     return (
         <div className="space-y-8 pb-10">
@@ -1175,7 +1206,13 @@ function TabNotifications() {
                                 <p className="text-xs text-pm-secondary mt-0.5">{c.description}</p>
                             </div>
                             <label className="relative inline-flex items-center cursor-pointer flex-shrink-0 mt-0.5">
-                                <input type="checkbox" defaultChecked={c.enabled} className="sr-only peer" />
+                                <input
+                                    type="checkbox"
+                                    checked={c.enabled}
+                                    disabled={savingChannelId === c.id}
+                                    onChange={event => handleToggleChannel(c.id, event.target.checked)}
+                                    className="sr-only peer"
+                                />
                                 <div className="w-10 h-5 bg-pm-secondary/30 rounded-full peer peer-checked:bg-pm-primary transition-colors"></div>
                                 <div className="absolute left-0.5 top-0.5 bg-white w-4 h-4 rounded-full shadow peer-checked:translate-x-5 transition-transform"></div>
                             </label>
