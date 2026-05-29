@@ -682,6 +682,29 @@ function TabNotifications() {
             return String(value);
         };
 
+        const now = new Date();
+        const currentYear = now.getFullYear();
+        const currentMonth = now.getMonth() + 1;
+        const getPeriodLabel = (group: typeof dataGroups[number]) => {
+            if (group.updateFrequency === 'monthly') {
+                return now.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+            }
+            if (group.updateFrequency === 'yearly') {
+                return String(currentYear);
+            }
+            return 'Atualização vigente';
+        };
+        const getPeriodEntry = (unitId: string, group: typeof dataGroups[number]) => {
+            const groupEntries = entries.filter(candidate => candidate.unitId === unitId && candidate.dataGroupId === group.id);
+            if (group.updateFrequency === 'monthly') {
+                return groupEntries.find(candidate => candidate.referenceYear === currentYear && candidate.referenceMonth === currentMonth);
+            }
+            if (group.updateFrequency === 'yearly') {
+                return groupEntries.find(candidate => candidate.referenceYear === currentYear);
+            }
+            return groupEntries.sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())[0];
+        };
+
         const rows = activeUnits.flatMap(unit => {
             const unitGroups = dataGroups
                 .filter(group => group.unitId === unit.id && selectedGroupIds.includes(group.id))
@@ -692,51 +715,48 @@ function TabNotifications() {
                 });
 
             return unitGroups.flatMap(group => {
-                const entry = entries
-                    .filter(candidate => candidate.unitId === unit.id && candidate.dataGroupId === group.id)
-                    .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime())[0];
+                const entry = getPeriodEntry(unit.id, group);
+                if (!entry) return [];
+
                 const entryValues = entry ? fieldValues.filter(value => value.entryId === entry.id) : [];
                 const activeFields = fields.filter(field => field.dataGroupId === group.id && field.isActive && field.type !== 'image').sort((left, right) => left.order - right.order);
+                const updatedByUser = users.find(candidate => candidate.id === entry.updatedBy);
+                const responsibleUser = users.find(candidate => candidate.id === unit.responsibleUpdaterId);
 
                 return activeFields.map(field => {
                     const fieldValue = entryValues.find(value => value.fieldId === field.id);
+                    if (!fieldValue || fieldValue.value === null || fieldValue.value === undefined || fieldValue.value === '') return null;
                     return {
                         unit: unit.name,
                         group: group.title,
                         field: field.name,
                         value: formatValue(fieldValue?.value, field.type),
-                        updatedAt: entry?.updatedAt ? new Date(entry.updatedAt).toLocaleString('pt-BR') : 'Sem atualização',
+                        period: getPeriodLabel(group),
+                        updatedAt: new Date(entry.updatedAt).toLocaleString('pt-BR'),
+                        updatedBy: updatedByUser?.email || updatedByUser?.name || 'Usuário não identificado',
                         sector: unit.responsibleSector || responsibleSectors.find(sector => sector.id === unit.responsibleSectorId)?.name || '-',
-                        responsible: users.find(candidate => candidate.id === unit.responsibleUpdaterId)?.email || users.find(candidate => candidate.id === unit.responsibleUpdaterId)?.name || '-'
+                        responsible: responsibleUser?.email || responsibleUser?.name || '-'
                     };
-                });
+                }).filter((row): row is NonNullable<typeof row> => Boolean(row));
             });
         });
 
-        const responsibleRows = activeUnits.map(unit => ({
-            unit: unit.name,
-            sector: unit.responsibleSector || responsibleSectors.find(sector => sector.id === unit.responsibleSectorId)?.name || '-',
-            responsible: users.find(candidate => candidate.id === unit.responsibleUpdaterId)?.email || users.find(candidate => candidate.id === unit.responsibleUpdaterId)?.name || '-'
-        }));
+        const updatedUsers = Array.from(new Set(rows.map(row => row.updatedBy)));
 
         const message = schedule?.message ?? scheduleMessage;
-        const includeResponsibles = schedule?.includeResponsibleSummary ?? includeResponsibleSummary;
 
         return `
             <div style="font-family: Arial, sans-serif; color: #172033; line-height: 1.45;">
                 <h2 style="margin: 0 0 8px;">${schedule?.subject ?? scheduleSubject}</h2>
                 <p style="margin: 0 0 18px;">${message.replace(/\n/g, '<br />')}</p>
-                ${includeResponsibles ? `
-                    <h3 style="margin: 22px 0 8px;">Setores e responsáveis</h3>
-                    <table style="border-collapse: collapse; width: 100%; font-size: 13px;">
-                        <thead><tr><th align="left" style="border:1px solid #d8dee8;padding:8px;">Tópico</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Setor</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Responsável</th></tr></thead>
-                        <tbody>${responsibleRows.map(row => `<tr><td style="border:1px solid #d8dee8;padding:8px;">${row.unit}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.sector}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.responsible}</td></tr>`).join('')}</tbody>
-                    </table>
-                ` : ''}
-                <h3 style="margin: 22px 0 8px;">Indicadores do modelo predefinido</h3>
+                <div style="display:flex;gap:12px;flex-wrap:wrap;margin:0 0 18px;">
+                    <div style="border:1px solid #d8dee8;border-radius:8px;padding:10px 12px;"><strong>${rows.length}</strong><br /><span style="font-size:12px;color:#5f6b7a;">indicadores atualizados</span></div>
+                    <div style="border:1px solid #d8dee8;border-radius:8px;padding:10px 12px;"><strong>${updatedUsers.length}</strong><br /><span style="font-size:12px;color:#5f6b7a;">usuários atualizaram</span></div>
+                </div>
+                <h3 style="margin: 22px 0 8px;">Indicadores atualizados no período do sistema</h3>
                 <table style="border-collapse: collapse; width: 100%; font-size: 12px;">
-                    <thead><tr><th align="left" style="border:1px solid #d8dee8;padding:8px;">Tópico</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Seção</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Indicador</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Valor</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Atualização</th></tr></thead>
-                    <tbody>${rows.length > 0 ? rows.map(row => `<tr><td style="border:1px solid #d8dee8;padding:8px;">${row.unit}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.group}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.field}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.value}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.updatedAt}</td></tr>`).join('') : '<tr><td colspan="5" style="border:1px solid #d8dee8;padding:8px;">Nenhum indicador encontrado no modelo.</td></tr>'}</tbody>
+                    <thead><tr><th align="left" style="border:1px solid #d8dee8;padding:8px;">Atualizado por</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Tópico</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Setor</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Responsável</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Seção</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Indicador</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Valor</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Período</th><th align="left" style="border:1px solid #d8dee8;padding:8px;">Atualização</th></tr></thead>
+                    <tbody>${rows.length > 0 ? rows.map(row => `<tr><td style="border:1px solid #d8dee8;padding:8px;">${row.updatedBy}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.unit}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.sector}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.responsible}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.group}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.field}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.value}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.period}</td><td style="border:1px solid #d8dee8;padding:8px;">${row.updatedAt}</td></tr>`).join('') : '<tr><td colspan="9" style="border:1px solid #d8dee8;padding:8px;">Nenhum indicador atualizado foi encontrado para o período atual do sistema.</td></tr>'}</tbody>
                 </table>
             </div>
         `;
