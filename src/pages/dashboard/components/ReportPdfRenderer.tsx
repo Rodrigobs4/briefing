@@ -217,16 +217,18 @@ const formatCollectionValue = (field: any, value: any) => {
     return value.valueText || null;
 };
 
-const getCollectionColumnWidths = (collectionFields: any[]) => {
+const getCollectionColumnWidths = (collectionFields: any[], showTotalColumn = false) => {
     if (collectionFields.length === 0) return [];
 
-    const weights = collectionFields.map(field => {
+    const weights: number[] = collectionFields.map(field => {
         if (field.type === 'currency') return 1.35;
         if (['number', 'percentage', 'calculated'].includes(field.type)) return 0.85;
         if (field.type === 'textarea') return 2.6;
         if (isDateOrPeriodField(field.name)) return 1;
         return 1.8;
     });
+    if (showTotalColumn) weights.push(0.9);
+
     const totalWeight = weights.reduce((total, weight) => total + weight, 0);
 
     return weights.map(weight => `${((weight / totalWeight) * 100).toFixed(2)}%`);
@@ -943,17 +945,58 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                         if (itemsToRender.length === 0) return null;
 
                                         if (group.collectionLayout === 'table' && collectionFields.length > 0) {
+                                            const totalFields = collectionFields.filter(field => ['number', 'currency', 'calculated'].includes(field.type));
+                                            const showCollectionTotalColumn = group.showTotal && totalFields.length > 0;
+                                            const totalIsCurrency = totalFields.length > 0 && totalFields.every(field => field.type === 'currency');
+                                            const getCollectionRawNumber = (itemId: string, field: any) => {
+                                                const itemValues = getValuesForItem(itemId);
+                                                const value = itemValues.find((itemValue: any) => itemValue.fieldId === field.id);
+
+                                                if (field.type === 'calculated' && (value?.valueNumber === null || value?.valueNumber === undefined)) {
+                                                    const allValues = itemValues.reduce((acc: Record<string, any>, curr: any) => {
+                                                        acc[curr.fieldId] = curr.valueNumber ?? curr.valueText;
+                                                        return acc;
+                                                    }, {});
+                                                    const calculated = calculateFieldValue(field, allValues, fields, true);
+                                                    return calculated !== null && Number.isFinite(calculated) ? calculated : null;
+                                                }
+
+                                                const numericValue = Number(value?.valueNumber);
+                                                return Number.isFinite(numericValue) ? numericValue : null;
+                                            };
+                                            const renderCollectionTotal = (itemId: string) => {
+                                                const numericValues = totalFields
+                                                    .map(field => getCollectionRawNumber(itemId, field))
+                                                    .filter((value): value is number => value !== null);
+                                                if (numericValues.length === 0) return '-';
+
+                                                const total = numericValues.reduce((sum, value) => sum + value, 0);
+                                                return (
+                                                    <MetricValue
+                                                        key={`${itemId}-collection-total`}
+                                                        value={totalIsCurrency ? formatBrazilianNumber(total, true) : total.toLocaleString('pt-BR')}
+                                                        label="Total"
+                                                    />
+                                                );
+                                            };
+
                                             return (
                                                 <div key={group.id} className="report-metric-panel break-inside-avoid">
                                                     <CompactTable
-                                                        headers={collectionFields.map(field => field.name)}
+                                                        headers={[
+                                                            ...collectionFields.map(field => field.name),
+                                                            ...(showCollectionTotalColumn ? ['Total'] : [])
+                                                        ]}
                                                         rows={[
                                                             { type: 'section' as const, label: group.title, groupId: group.id },
                                                             ...itemsToRender.map(item =>
-                                                                collectionFields.map(field => renderCollectionFieldValue(item.id, field))
+                                                                [
+                                                                    ...collectionFields.map(field => renderCollectionFieldValue(item.id, field)),
+                                                                    ...(showCollectionTotalColumn ? [renderCollectionTotal(item.id)] : [])
+                                                                ]
                                                             )
                                                         ]}
-                                                        colWidths={getCollectionColumnWidths(collectionFields)}
+                                                        colWidths={getCollectionColumnWidths(collectionFields, showCollectionTotalColumn)}
                                                         variant="metrics"
                                                         highlightRules={getTableHighlights(group.id)}
                                                     />

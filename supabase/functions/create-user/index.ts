@@ -56,6 +56,7 @@ Deno.serve(async (req) => {
             .upsert({
                 id: created.user.id,
                 name,
+                email,
                 role,
                 unit_id: null,
                 is_active: true

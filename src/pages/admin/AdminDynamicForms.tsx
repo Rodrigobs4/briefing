@@ -325,6 +325,9 @@ export default function AdminDynamicForms() {
     const handleCreateGroup = async () => {
         if (!newGroupTitle.trim() || !selectedUnit) return;
         const newId = crypto.randomUUID();
+        const shouldSaveShowTotal =
+            (newGroupMode === 'snapshot' && newGroupReportLayout === 'table' && newGroupUpdateFrequency !== 'fixed')
+            || (newGroupMode === 'collection' && newGroupCollectionLayout === 'table');
         setGroupError('');
         try {
             await addDataGroup({
@@ -334,7 +337,7 @@ export default function AdminDynamicForms() {
                 order: unitGroups.length + 1,
                 mode: newGroupMode,
                 updateFrequency: newGroupMode === 'snapshot' && newGroupReportLayout === 'table' ? newGroupUpdateFrequency : 'fixed',
-                showTotal: newGroupShowTotal,
+                showTotal: shouldSaveShowTotal ? newGroupShowTotal : false,
                 collectionLayout: newGroupMode === 'collection' ? newGroupCollectionLayout : 'narrative',
                 reportLayout: newGroupMode === 'snapshot' ? newGroupReportLayout : 'table',
                 categoryTitle: null,
@@ -392,12 +395,15 @@ export default function AdminDynamicForms() {
 
     const saveGroupEdit = async () => {
         if (!editingGroup || !editGroupTitle.trim()) return;
+        const shouldSaveShowTotal =
+            (editingGroup.mode === 'snapshot' && editGroupReportLayout === 'table' && editGroupUpdateFrequency !== 'fixed')
+            || (editingGroup.mode === 'collection' && editGroupCollectionLayout === 'table');
         setGroupError('');
         try {
             await updateDataGroup(editingGroup.id, {
                 title: editGroupTitle,
                 updateFrequency: editingGroup.mode === 'snapshot' && editGroupReportLayout === 'table' ? editGroupUpdateFrequency : 'fixed',
-                showTotal: editGroupShowTotal,
+                showTotal: shouldSaveShowTotal ? editGroupShowTotal : false,
                 collectionLayout: editingGroup.mode === 'collection' ? editGroupCollectionLayout : 'narrative',
                 reportLayout: editingGroup.mode === 'snapshot' ? editGroupReportLayout : 'table'
             });
@@ -865,14 +871,14 @@ export default function AdminDynamicForms() {
                                         <label className="input-label">MODO OPERACIONAL</label>
                                         <div className="grid grid-cols-2 gap-3 p-1.5 bg-white border border-pm-secondary/20 rounded-2xl shadow-inner">
                                             <button
-                                                onClick={() => setNewGroupMode('snapshot')}
+                                                onClick={() => { setNewGroupMode('snapshot'); setNewGroupShowTotal(true); }}
                                                 className={`flex flex-col items-center justify-center gap-1.5 py-3 rounded-xl transition-all ${newGroupMode === 'snapshot' ? 'bg-pm-dark text-white shadow-premium' : 'text-pm-secondary hover:bg-pm-light'}`}
                                             >
                                                 <Database className="w-4 h-4" />
                                                 <span className="text-[9px] font-black uppercase tracking-widest">Snapshot</span>
                                             </button>
                                             <button
-                                                onClick={() => { setNewGroupMode('collection'); setNewGroupUpdateFrequency('fixed'); }}
+                                                onClick={() => { setNewGroupMode('collection'); setNewGroupUpdateFrequency('fixed'); setNewGroupShowTotal(false); }}
                                                 className={`flex flex-col items-center justify-center gap-1.5 py-3 rounded-xl transition-all ${newGroupMode === 'collection' ? 'bg-pm-dark text-white shadow-premium' : 'text-pm-secondary hover:bg-pm-light'}`}
                                             >
                                                 <ClipboardList className="w-4 h-4" />
@@ -946,6 +952,22 @@ export default function AdminDynamicForms() {
                                             </select>
                                             <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
                                                 Na tabela, cada atributo vira uma coluna e cada cadastro vira uma linha.
+                                            </p>
+                                        </div>
+                                    )}
+                                    {newGroupMode === 'collection' && newGroupCollectionLayout === 'table' && (
+                                        <div>
+                                            <label className="input-label">TOTAL NO RELATÓRIO</label>
+                                            <select
+                                                value={newGroupShowTotal ? 'show' : 'hide'}
+                                                onChange={e => setNewGroupShowTotal(e.target.value === 'show')}
+                                                className="input-field"
+                                            >
+                                                <option value="show">Exibir total</option>
+                                                <option value="hide">Ocultar total</option>
+                                            </select>
+                                            <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
+                                                Adiciona uma coluna total somando os campos numéricos da linha.
                                             </p>
                                         </div>
                                     )}
@@ -1620,6 +1642,19 @@ export default function AdminDynamicForms() {
                                     >
                                         <option value="narrative">Resumo atual</option>
                                         <option value="table">Tabela por colunas</option>
+                                    </select>
+                                </div>
+                            )}
+                            {editingGroup.mode === 'collection' && editGroupCollectionLayout === 'table' && (
+                                <div>
+                                    <label className="input-label">TOTAL NO RELATÓRIO</label>
+                                    <select
+                                        value={editGroupShowTotal ? 'show' : 'hide'}
+                                        onChange={e => setEditGroupShowTotal(e.target.value === 'show')}
+                                        className="input-field h-14"
+                                    >
+                                        <option value="show">Exibir total</option>
+                                        <option value="hide">Ocultar total</option>
                                     </select>
                                 </div>
                             )}
