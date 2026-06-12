@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { useAuth, FieldType, Field, CalculationOperation, DataGroupUpdateFrequency, DataGroupCollectionLayout, DataGroupReportLayout } from '../../store/AuthContext';
+import { useAuth, FieldType, Field, Unit, CalculationOperation, DataGroupUpdateFrequency, DataGroupCollectionLayout, DataGroupReportLayout } from '../../store/AuthContext';
 import {
-    Plus, Trash2, LayoutTemplate, Type, Hash, Image as ImageIcon, Percent, Edit2, AlertTriangle,
+    Plus, Trash2, LayoutTemplate, Type, Hash, Image as ImageIcon, Percent, Edit2, AlertTriangle, Loader2,
     Save, Copy, ChevronUp, ChevronDown, Search, X, Check, Smile, Calculator,
     Database, Shield, ShieldCheck, ShieldAlert, Camera, Video, FileSearch, FileText,
     ClipboardList, FileCheck, AlertCircle, BadgeAlert, Plane, Helicopter, Users, UserRound,
@@ -243,6 +243,7 @@ export default function AdminDynamicForms() {
     const [editUnitResponsibleUpdaterId, setEditUnitResponsibleUpdaterId] = useState('');
     const [editUnitCategory, setEditUnitCategory] = useState('');
     const [deletingUnit, setDeletingUnit] = useState<any>(null); // For confirmation modal
+    const [duplicatingUnitId, setDuplicatingUnitId] = useState<string | null>(null);
 
     // Icon Picker Modal State
     // 'create' = formulário de criação | 'edit' = modal de edição | null = fechado
@@ -322,6 +323,85 @@ export default function AdminDynamicForms() {
         setDeletingUnit(null);
     }
 
+    const copyFieldForGroup = (field: Field, newDataGroupId: string, idMap: Record<string, string>): Field => ({
+        ...field,
+        id: idMap[field.id],
+        dataGroupId: newDataGroupId,
+        calculationConfig: field.calculationConfig
+            ? {
+                ...field.calculationConfig,
+                sourceFieldIds: field.calculationConfig.sourceFieldIds.map(sourceId => idMap[sourceId] ?? sourceId)
+            }
+            : field.calculationConfig,
+        enumOptions: [...(field.enumOptions ?? [])]
+    });
+
+    const duplicateFieldsForGroup = async (sourceGroupId: string, newGroupId: string) => {
+        const fieldsToCopy = fields
+            .filter(field => field.dataGroupId === sourceGroupId && field.isActive)
+            .sort((a, b) => a.order - b.order);
+        const idMap = Object.fromEntries(fieldsToCopy.map(field => [field.id, crypto.randomUUID()]));
+
+        for (const field of fieldsToCopy) {
+            await addField(copyFieldForGroup(field, newGroupId, idMap));
+        }
+    };
+
+    const handleDuplicateUnit = async (unitToCopy: Unit) => {
+        const newUnitId = crypto.randomUUID();
+        const nextOrderIndex = Math.max(0, ...briefingUnits.map(unit => unit.order_index ?? 0)) + 1;
+
+        setDuplicatingUnitId(unitToCopy.id);
+        setGroupError('');
+
+        try {
+            await addUnit({
+                id: newUnitId,
+                name: `${unitToCopy.name} (Cópia)`,
+                order_index: nextOrderIndex,
+                unitType: unitToCopy.unitType ?? 'general_topic',
+                description: unitToCopy.description || 'briefcase',
+                regionName: unitToCopy.regionName ?? null,
+                regionalAscom: unitToCopy.regionalAscom ?? null,
+                responsibleSector: unitToCopy.responsibleSector ?? null,
+                responsibleSectorId: unitToCopy.responsibleSectorId ?? null,
+                responsibleUpdaterId: unitToCopy.responsibleUpdaterId ?? null,
+                reportCategoryTitle: unitToCopy.reportCategoryTitle ?? null,
+                reportCategoryOrder: unitToCopy.reportCategoryOrder ?? 999,
+                createdAt: new Date().toISOString()
+            });
+
+            const groupsToCopy = dataGroups
+                .filter(group => group.unitId === unitToCopy.id)
+                .sort((a, b) => a.order - b.order);
+
+            for (const group of groupsToCopy) {
+                const newGroupId = crypto.randomUUID();
+                await addDataGroup({
+                    id: newGroupId,
+                    unitId: newUnitId,
+                    title: group.title,
+                    order: group.order,
+                    mode: group.mode,
+                    updateFrequency: group.updateFrequency ?? 'fixed',
+                    showTotal: group.showTotal ?? false,
+                    collectionLayout: group.collectionLayout ?? 'narrative',
+                    reportLayout: group.reportLayout ?? 'table',
+                    categoryTitle: group.categoryTitle ?? null,
+                    categoryOrder: group.categoryOrder ?? 999
+                });
+                await duplicateFieldsForGroup(group.id, newGroupId);
+            }
+
+            setSelectedUnit(newUnitId);
+            setSelectedGroup(null);
+        } catch (error: any) {
+            setGroupError(`Não foi possível duplicar o tópico. ${error.message || 'Verifique a configuração do banco de dados.'}`);
+        } finally {
+            setDuplicatingUnitId(null);
+        }
+    };
+
     const handleCreateGroup = async () => {
         if (!newGroupTitle.trim() || !selectedUnit) return;
         const newId = crypto.randomUUID();
@@ -380,15 +460,7 @@ export default function AdminDynamicForms() {
             return;
         }
 
-        // Copia os Campos pertencentes
-        const fieldsToCopy = fields.filter(f => f.dataGroupId === groupToCopy.id && f.isActive);
-        fieldsToCopy.forEach(field => {
-            addField({
-                ...field,
-                id: crypto.randomUUID(),
-                dataGroupId: newGroupUUID
-            });
-        });
+        await duplicateFieldsForGroup(groupToCopy.id, newGroupUUID);
 
         setSelectedGroup(newGroupUUID);
     };
@@ -753,7 +825,7 @@ export default function AdminDynamicForms() {
                                             setSelectedUnit(unit.id);
                                             setSelectedGroup(null);
                                         }}
-                                        className={`w-full flex items-center gap-4 pl-12 pr-6 py-5 rounded-3xl transition-all border-2 text-left ${selectedUnit === unit.id
+                                        className={`w-full flex items-center gap-4 pl-12 pr-24 py-5 rounded-3xl transition-all border-2 text-left ${selectedUnit === unit.id
                                             ? 'bg-white border-pm-primary/40 shadow-premium-lg translate-x-1'
                                             : 'bg-transparent border-transparent hover:bg-pm-light/50 hover:border-pm-secondary/10'
                                             }`}
@@ -813,22 +885,36 @@ export default function AdminDynamicForms() {
                                             </div>
                                         </div>
                                     </button>
-                                    <button
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            setEditingUnit(unit);
-                                            setEditUnitName(unit.name);
-                                            setEditUnitIcon(unit.description || 'briefcase');
-                                            setEditUnitRegion(unit.regionName || '');
-                                            setEditUnitAscom(unit.regionalAscom || '');
-                                            setEditUnitResponsibleSector(unit.responsibleSector || '');
-                                            setEditUnitResponsibleUpdaterId(unit.responsibleUpdaterId || '');
-                                            setEditUnitCategory(unit.reportCategoryTitle || '');
-                                        }}
-                                        className={`absolute right-4 top-1/2 -translate-y-1/2 p-2.5 rounded-xl transition-all ${selectedUnit === unit.id ? 'bg-pm-primary/10 text-pm-primary hover:bg-pm-primary hover:text-white shadow-sm' : 'bg-transparent text-pm-secondary/20 hover:text-pm-primary hover:bg-white opacity-0 group-hover:opacity-100'}`}
-                                    >
-                                        <Edit2 className="w-4 h-4" />
-                                    </button>
+                                    <div className={`absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-1.5 transition-all ${selectedUnit === unit.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleDuplicateUnit(unit);
+                                            }}
+                                            disabled={duplicatingUnitId === unit.id}
+                                            title="Duplicar tópico"
+                                            className={`p-2.5 rounded-xl transition-all disabled:opacity-50 ${selectedUnit === unit.id ? 'bg-pm-primary/10 text-pm-primary hover:bg-pm-primary hover:text-white shadow-sm' : 'bg-white text-pm-secondary hover:text-pm-primary shadow-premium border border-pm-secondary/10'}`}
+                                        >
+                                            {duplicatingUnitId === unit.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Copy className="w-4 h-4" />}
+                                        </button>
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                setEditingUnit(unit);
+                                                setEditUnitName(unit.name);
+                                                setEditUnitIcon(unit.description || 'briefcase');
+                                                setEditUnitRegion(unit.regionName || '');
+                                                setEditUnitAscom(unit.regionalAscom || '');
+                                                setEditUnitResponsibleSector(unit.responsibleSector || '');
+                                                setEditUnitResponsibleUpdaterId(unit.responsibleUpdaterId || '');
+                                                setEditUnitCategory(unit.reportCategoryTitle || '');
+                                            }}
+                                            title="Editar tópico"
+                                            className={`p-2.5 rounded-xl transition-all ${selectedUnit === unit.id ? 'bg-pm-primary/10 text-pm-primary hover:bg-pm-primary hover:text-white shadow-sm' : 'bg-white text-pm-secondary hover:text-pm-primary shadow-premium border border-pm-secondary/10'}`}
+                                        >
+                                            <Edit2 className="w-4 h-4" />
+                                        </button>
+                                    </div>
                                 </div>
                             );
                         })}
@@ -1159,9 +1245,9 @@ export default function AdminDynamicForms() {
 
             {/* MODAL DE EDIÇÃO DE UNIDADE */}
             {editingUnit && (
-                <div className="fixed inset-0 bg-pm-dark/60 backdrop-blur-md z-[55] flex items-center justify-center p-4">
-                    <div className="bg-white rounded-[2rem] shadow-premium-2xl w-full max-w-md p-8 border border-pm-secondary/10 animate-in fade-in zoom-in-95 duration-200">
-                        <div className="flex justify-between items-center mb-8">
+                <div className="fixed inset-0 bg-pm-dark/60 backdrop-blur-md z-[55] flex items-start sm:items-center justify-center overflow-y-auto p-3 sm:p-4">
+                    <div className="bg-white rounded-[1.5rem] sm:rounded-[2rem] shadow-premium-2xl w-full max-w-md max-h-[calc(100vh-1.5rem)] sm:max-h-[calc(100vh-2rem)] border border-pm-secondary/10 animate-in fade-in zoom-in-95 duration-200 flex flex-col overflow-hidden">
+                        <div className="flex justify-between items-center p-6 sm:p-8 pb-4 sm:pb-5 border-b border-pm-secondary/10">
                             <div>
                                 <h3 className="text-xl font-black text-pm-dark uppercase tracking-tight">Editar Tópico</h3>
                                 <p className="text-[10px] font-bold text-pm-secondary/50 uppercase tracking-widest mt-1">Configurações Base</p>
@@ -1169,7 +1255,7 @@ export default function AdminDynamicForms() {
                             <button onClick={() => setEditingUnit(null)} className="w-10 h-10 flex items-center justify-center rounded-full hover:bg-pm-light text-pm-secondary transition-all">&times;</button>
                         </div>
 
-                        <div className="space-y-6">
+                        <div className="space-y-5 overflow-y-auto custom-scrollbar px-6 sm:px-8 py-5">
                             <div>
                                 <label className="input-label">NOME DO TÓPICO</label>
                                 <input
@@ -1280,7 +1366,7 @@ export default function AdminDynamicForms() {
                             </div>
                         </div>
 
-                        <div className="flex flex-col gap-3 mt-10">
+                        <div className="flex flex-col gap-3 p-6 sm:p-8 pt-4 sm:pt-5 border-t border-pm-secondary/10 bg-white">
                             <button
                                 onClick={saveUnitEdit}
                                 disabled={!editUnitName.trim()}
