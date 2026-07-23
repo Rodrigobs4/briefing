@@ -217,6 +217,16 @@ const formatCollectionValue = (field: any, value: any) => {
     return value.valueText || null;
 };
 
+const isExplicitTotalField = (field: any) => {
+    const normalizedName = String(field?.name ?? '')
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim()
+        .toLowerCase();
+
+    return normalizedName === 'total' || normalizedName === 'total geral';
+};
+
 const getCollectionColumnWidths = (collectionFields: any[], showTotalColumn = false) => {
     if (collectionFields.length === 0) return [];
 
@@ -274,7 +284,7 @@ const CompactTable = ({
     narrative?: boolean;
 }) => (
     <div className="report-table report-table-keep-together mb-5 overflow-hidden border border-slate-300 rounded-lg">
-        <table className={`w-full text-left border-collapse bg-white table-fixed report-table-${variant} ${financial ? 'report-table-financial' : ''} ${narrative ? 'report-table-narrative' : ''}`}>
+        <table className={`w-full text-left border-collapse bg-white table-fixed report-table-${variant} ${financial ? 'report-table-financial' : ''} ${narrative ? 'report-table-narrative' : ''} ${headers.length >= 10 ? 'report-table-many-columns' : ''}`}>
             <thead>
                 <tr className="bg-slate-900 text-white">
                     {headers.map((h, i) => (
@@ -304,7 +314,7 @@ const CompactTable = ({
                     return (
                         <tr key={i} className="report-table-row hover:bg-slate-50 transition-colors">
                             {row.map((cell, j) => (
-                                <td key={j} className={`px-3 py-2 text-[11px] font-bold border-r border-slate-100 last:border-0 ${j === 0 ? 'bg-slate-50/40 text-slate-900' : getValueToneClass(cell, j, row[0])} ${getCellHighlightClass(highlightRules, dataRowIndex, j)}`}>
+                                <td key={j} className={`px-3 py-2 text-[11px] font-bold border-r border-slate-100 last:border-0 ${j === 0 ? 'bg-slate-50/40 text-slate-900' : getValueToneClass(cell, j, row[0])} ${j > 0 && typeof cell === 'string' && cell !== '-' ? 'report-table-text-cell' : ''} ${getCellHighlightClass(highlightRules, dataRowIndex, j)}`}>
                                     {cell}
                                 </td>
                             ))}
@@ -945,8 +955,11 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                         if (itemsToRender.length === 0) return null;
 
                                         if (group.collectionLayout === 'table' && collectionFields.length > 0) {
-                                            const totalFields = collectionFields.filter(field => ['number', 'currency', 'calculated'].includes(field.type));
-                                            const showCollectionTotalColumn = group.showTotal && totalFields.length > 0;
+                                            const hasExplicitTotalField = collectionFields.some(isExplicitTotalField);
+                                            const totalFields = collectionFields.filter(field =>
+                                                ['number', 'currency', 'calculated'].includes(field.type) && !isExplicitTotalField(field)
+                                            );
+                                            const showCollectionTotalColumn = group.showTotal && totalFields.length > 0 && !hasExplicitTotalField;
                                             const totalIsCurrency = totalFields.length > 0 && totalFields.every(field => field.type === 'currency');
                                             const getCollectionRawNumber = (itemId: string, field: any) => {
                                                 const itemValues = getValuesForItem(itemId);
@@ -1357,6 +1370,9 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                     font-size: 12px;
                     padding-top: 10px;
                     padding-bottom: 10px;
+                    overflow-wrap: normal;
+                    word-break: normal;
+                    white-space: normal;
                 }
 
                 .report-table-metrics th:not(:first-child):not(:last-child) {
@@ -1372,12 +1388,16 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                 .report-table-metrics td {
                     font-size: 12px;
                     vertical-align: top;
-                    overflow-wrap: anywhere;
+                    overflow-wrap: normal;
+                    word-break: normal;
+                    white-space: normal;
                 }
 
                 .report-table-metrics td:first-child {
                     width: 34%;
                     white-space: normal;
+                    overflow-wrap: normal;
+                    word-break: normal;
                 }
 
                 .report-table-metrics td:nth-child(2) {
@@ -1388,6 +1408,14 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                 .report-table-metrics th:not(:first-child),
                 .report-table-metrics td:not(:first-child) {
                     text-align: center;
+                }
+
+                .report-table-metrics td.report-table-text-cell {
+                    text-align: left;
+                    line-height: 1.45;
+                    overflow-wrap: normal;
+                    word-break: normal;
+                    white-space: normal;
                 }
 
                 .report-table-metrics td:last-child {
@@ -1405,6 +1433,36 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                 .report-table-financial td:first-child {
                     padding-left: 8px;
                     padding-right: 6px;
+                }
+
+                .report-table-financial .report-metric-value {
+                    font-size: 12px !important;
+                    letter-spacing: -0.025em;
+                }
+
+                .report-table-financial .report-metric-value-long,
+                .report-table-financial .report-metric-value-xlong {
+                    font-size: 10.5px !important;
+                    letter-spacing: -0.04em;
+                }
+
+                .report-table-many-columns th {
+                    font-size: 8px !important;
+                    padding-left: 2px !important;
+                    padding-right: 2px !important;
+                    letter-spacing: 0;
+                    white-space: nowrap;
+                }
+
+                .report-table-many-columns td {
+                    padding-left: 3px !important;
+                    padding-right: 3px !important;
+                }
+
+                .report-font-large .report-table-many-columns th {
+                    font-size: 8px !important;
+                    padding-left: 2px !important;
+                    padding-right: 2px !important;
                 }
 
                 .report-table-narrative th:nth-child(2),
