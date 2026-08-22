@@ -54,6 +54,7 @@ import { getPublicUploadUrl } from "../../utils/storageUrls";
 import { sortByTextPtBr } from "../../utils/textOrdering";
 import { formatBrazilianNumber } from "../../utils/brazilianNumbers";
 import { isGeneralBriefingUnit } from "../../utils/generalBriefingUnits";
+import { evaluateUnitUpdateAlert } from "../../utils/unitUpdateAlertCycle";
 
 const GeneralTrendChart = lazy(() =>
   import("./components/DashboardCharts").then((module) => ({ default: module.GeneralTrendChart })),
@@ -69,45 +70,6 @@ const ChartFallback = () => <div className="h-full w-full animate-pulse rounded-
 
 type DashboardTab = "overview" | "indicators" | "records" | "detail";
 type UpdateAlertStatus = "overdue" | "late" | "pending" | "complete";
-
-const getRecurringUpdateCycle = (
-  rule: { startsAt: string; weekdays: number[]; deadlineTime: string },
-  now = new Date(),
-) => {
-  const activatedAt = new Date(rule.startsAt);
-  const [hours = 18, minutes = 0] = rule.deadlineTime.split(":").map(Number);
-  const deadlines: Date[] = [];
-
-  for (let offset = -15; offset <= 8; offset += 1) {
-    const deadline = new Date(now);
-    deadline.setDate(now.getDate() + offset);
-    deadline.setHours(hours, minutes, 0, 0);
-    if (rule.weekdays.includes(deadline.getDay()) && deadline.getTime() >= activatedAt.getTime()) {
-      deadlines.push(deadline);
-    }
-  }
-
-  deadlines.sort((left, right) => left.getTime() - right.getTime());
-  const elapsedDeadlines = deadlines.filter((deadline) => deadline.getTime() <= now.getTime());
-  const elapsed = elapsedDeadlines[elapsedDeadlines.length - 1];
-  const upcoming = deadlines.find((deadline) => deadline.getTime() > now.getTime());
-
-  if (!elapsed) {
-    return {
-      startsAt: activatedAt,
-      dueAt: upcoming ?? activatedAt,
-      hasElapsedDeadline: false,
-    };
-  }
-
-  const previousDeadlines = deadlines.filter((deadline) => deadline.getTime() < elapsed.getTime());
-  const previous = previousDeadlines[previousDeadlines.length - 1];
-  return {
-    startsAt: previous ?? activatedAt,
-    dueAt: elapsed,
-    hasElapsedDeadline: true,
-  };
-};
 
 const formatDashboardValue = (field: { type: string; value: unknown }) => {
   const numericValue = Number(field.value);
@@ -287,35 +249,32 @@ export default function DashboardExecutivo() {
         if (!unit) return null;
 
         const unitEntryIds = new Set(entries.filter((entry) => entry.unitId === unit.id).map((entry) => entry.id));
-        const activeItemIds = new Set(collectionItems
-          .filter((item) => item.unitId === unit.id && item.status !== "archived")
-          .map((item) => item.id));
-        const snapshotUpdates = fieldValues
-          .filter((value) => unitEntryIds.has(value.entryId) && hasValue(value.value))
-          .map((value) => value.updatedAt);
-        const collectionUpdates = collectionFieldValues
-          .filter((value) =>
-            activeItemIds.has(value.itemId) &&
-            (hasValue(value.valueText) || value.valueNumber !== null || hasValue(value.valueJson)),
-          )
-          .map((value) => value.updatedAt);
-        const cycle = getRecurringUpdateCycle(rule);
-        const latestUpdate = [...snapshotUpdates, ...collectionUpdates]
-          .filter((updatedAt) => new Date(updatedAt).getTime() >= cycle.startsAt.getTime())
-          .sort((left, right) => new Date(right).getTime() - new Date(left).getTime())[0] ?? null;
-        const latestAt = latestUpdate ? new Date(latestUpdate).getTime() : 0;
-        const completed = latestAt >= cycle.startsAt.getTime();
-        const status: UpdateAlertStatus = !cycle.hasElapsedDeadline
-          ? "pending"
-          : completed
-            ? (latestAt > cycle.dueAt.getTime() ? "late" : "complete")
-            : "overdue";
+        const unitEntries = entries.filter((entry) => entry.unitId === unit.id);
+        const activeItems = collectionItems.filter((item) => item.unitId === unit.id && item.status !== "archived");
+        const activeItemIds = new Set(activeItems.map((item) => item.id));
+        const snapshotUpdates = [
+          ...unitEntries.map((entry) => entry.updatedAt),
+          ...fieldValues
+            .filter((value) => unitEntryIds.has(value.entryId) && hasValue(value.value))
+            .map((value) => value.updatedAt),
+        ];
+        const collectionUpdates = [
+          ...activeItems.map((item) => item.updatedAt),
+          ...collectionFieldValues
+            .filter((value) =>
+              activeItemIds.has(value.itemId) &&
+              (hasValue(value.valueText) || value.valueNumber !== null || hasValue(value.valueJson)),
+            )
+            .map((value) => value.updatedAt),
+        ];
+        const evaluation = evaluateUnitUpdateAlert(rule, [...snapshotUpdates, ...collectionUpdates]);
+        const status: UpdateAlertStatus = evaluation.status;
 
         return {
           unit,
           rule,
-          dueAt: cycle.dueAt,
-          latestUpdate,
+          dueAt: evaluation.dueAt,
+          latestUpdate: evaluation.latestUpdate,
           status,
           responsibleUpdater: unit.responsibleUpdaterId
             ? users.find((candidate) => candidate.id === unit.responsibleUpdaterId)?.name || "Responsável configurado"
