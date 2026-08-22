@@ -69,7 +69,7 @@ const GeneralRankingChart = lazy(() =>
 const ChartFallback = () => <div className="h-full w-full animate-pulse rounded-2xl bg-pm-light/70" />;
 
 type DashboardTab = "overview" | "indicators" | "records" | "detail";
-type UpdateAlertStatus = "overdue" | "late" | "pending" | "complete";
+type UpdateAlertStatus = "overdue" | "pending" | "complete";
 
 const formatDashboardValue = (field: { type: string; value: unknown }) => {
   const numericValue = Number(field.value);
@@ -275,6 +275,7 @@ export default function DashboardExecutivo() {
           rule,
           dueAt: evaluation.dueAt,
           latestUpdate: evaluation.latestUpdate,
+          lastUpdateAt: evaluation.lastUpdateAt,
           status,
           responsibleUpdater: unit.responsibleUpdaterId
             ? users.find((candidate) => candidate.id === unit.responsibleUpdaterId)?.name || "Responsável configurado"
@@ -283,16 +284,19 @@ export default function DashboardExecutivo() {
       })
       .filter(Boolean)
       .sort((left, right) => {
-        const priority: Record<UpdateAlertStatus, number> = { overdue: 0, late: 1, pending: 2, complete: 3 };
+        const priority: Record<UpdateAlertStatus, number> = { overdue: 0, pending: 1, complete: 2 };
         const first = left!;
         const second = right!;
+        const firstUpdateTime = first.lastUpdateAt ? new Date(first.lastUpdateAt).getTime() : 0;
+        const secondUpdateTime = second.lastUpdateAt ? new Date(second.lastUpdateAt).getTime() : 0;
         return priority[first.status] - priority[second.status] ||
-          first.dueAt.getTime() - second.dueAt.getTime();
+          firstUpdateTime - secondUpdateTime;
       }) as Array<{
         unit: (typeof units)[number];
         rule: (typeof unitUpdateAlertRules)[number];
         dueAt: Date;
         latestUpdate: string | null;
+        lastUpdateAt: string | null;
         status: UpdateAlertStatus;
         responsibleUpdater: string;
       }>;
@@ -300,8 +304,8 @@ export default function DashboardExecutivo() {
 
   const actionableAlerts = updateAlerts.filter((alert) => alert.status !== "complete");
   const overdueAlertCount = updateAlerts.filter((alert) => alert.status === "overdue").length;
-  const lateAlertCount = updateAlerts.filter((alert) => alert.status === "late").length;
   const pendingAlertCount = updateAlerts.filter((alert) => alert.status === "pending").length;
+  const completeAlertCount = updateAlerts.filter((alert) => alert.status === "complete").length;
   const visibleActionableAlerts = actionableAlerts.slice(0, 5);
 
   // LÓGICA 1 (NOVA): Hierarquia de Snapshots via DataGroupEntries
@@ -963,15 +967,15 @@ export default function DashboardExecutivo() {
             <div className="grid grid-cols-3 gap-2 sm:min-w-[360px]">
               <div className={`rounded-xl px-3 py-2 text-center ${overdueAlertCount > 0 ? "bg-red-50 text-red-700" : "bg-pm-light text-pm-secondary"}`}>
                 <strong className="block text-lg font-black">{overdueAlertCount}</strong>
-                <span className="text-[9px] font-black uppercase tracking-wider">em atraso</span>
-              </div>
-              <div className={`rounded-xl px-3 py-2 text-center ${lateAlertCount > 0 ? "bg-amber-50 text-amber-700" : "bg-pm-light text-pm-secondary"}`}>
-                <strong className="block text-lg font-black">{lateAlertCount}</strong>
                 <span className="text-[9px] font-black uppercase tracking-wider">atrasado</span>
               </div>
-              <div className="rounded-xl bg-blue-50 px-3 py-2 text-center text-blue-700">
+              <div className={`rounded-xl px-3 py-2 text-center ${pendingAlertCount > 0 ? "bg-blue-50 text-blue-700" : "bg-pm-light text-pm-secondary"}`}>
                 <strong className="block text-lg font-black">{pendingAlertCount}</strong>
                 <span className="text-[9px] font-black uppercase tracking-wider">aguardando</span>
+              </div>
+              <div className={`rounded-xl px-3 py-2 text-center ${completeAlertCount > 0 ? "bg-emerald-50 text-emerald-700" : "bg-pm-light text-pm-secondary"}`}>
+                <strong className="block text-lg font-black">{completeAlertCount}</strong>
+                <span className="text-[9px] font-black uppercase tracking-wider">atualizado</span>
               </div>
             </div>
             <div className="min-w-0 flex-1">
@@ -990,16 +994,16 @@ export default function DashboardExecutivo() {
                         </p>
                       </div>
                       <span className="text-[10px] font-bold uppercase tracking-wide text-pm-secondary">
-                        {alert.dueAt.toLocaleDateString("pt-BR")} {alert.dueAt.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}
+                        {alert.lastUpdateAt
+                          ? `${new Date(alert.lastUpdateAt).toLocaleDateString("pt-BR")} ${new Date(alert.lastUpdateAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`
+                          : "Sem atualização"}
                       </span>
                       <span className={`w-fit rounded-full px-2.5 py-1 text-[9px] font-black uppercase ${
                         alert.status === "overdue"
                           ? "bg-red-100 text-red-700"
-                          : alert.status === "late"
-                            ? "bg-amber-100 text-amber-700"
-                            : "bg-blue-100 text-blue-700"
+                          : "bg-blue-100 text-blue-700"
                       }`}>
-                        {alert.status === "overdue" ? "Não atualizado" : alert.status === "late" ? "Com atraso" : "Aguardando"}
+                        {alert.status === "overdue" ? "Atrasado" : "Aguardando"}
                       </span>
                     </div>
                   ))}

@@ -1,4 +1,4 @@
-export type UnitUpdateAlertStatus = "overdue" | "late" | "pending" | "complete";
+export type UnitUpdateAlertStatus = "overdue" | "pending" | "complete";
 
 export interface UnitUpdateAlertRuleLike {
   startsAt: string;
@@ -11,6 +11,7 @@ export interface UnitUpdateAlertEvaluation {
   dueAt: Date;
   cycleStart: Date;
   latestUpdate: string | null;
+  lastUpdateAt: string | null;
 }
 
 const parseDeadlineTime = (deadlineTime: string) => {
@@ -40,10 +41,23 @@ export const buildRecurringUpdateDeadlines = (
   return { activatedAt, deadlines };
 };
 
-const getCycleStart = (deadlines: Date[], deadline: Date, activatedAt: Date) => {
-  const index = deadlines.findIndex((candidate) => candidate.getTime() === deadline.getTime());
-  if (index <= 0) return activatedAt;
-  return deadlines[index - 1];
+const getUpdateDayStart = (deadline: Date) => {
+  const dayStart = new Date(deadline);
+  dayStart.setHours(0, 0, 1, 0);
+  return dayStart;
+};
+
+const getCycleStart = (deadline: Date, activatedAt: Date) => {
+  const dayStart = getUpdateDayStart(deadline);
+  return dayStart.getTime() < activatedAt.getTime() ? activatedAt : dayStart;
+};
+
+const getAbsoluteLatestUpdate = (updateTimestamps: string[]) => {
+  const latest = updateTimestamps
+    .map((updatedAt) => new Date(updatedAt))
+    .sort((left, right) => right.getTime() - left.getTime())[0];
+
+  return latest ? latest.toISOString() : null;
 };
 
 const getLatestUpdateInWindow = (updateTimestamps: string[], cycleStart: Date, cycleEnd: Date) => {
@@ -72,23 +86,21 @@ const getLatestUpdateAfter = (updateTimestamps: string[], cycleStart: Date) => {
 
 const evaluatePassedDeadline = (
   updateTimestamps: string[],
-  deadlines: Date[],
   dueAt: Date,
   activatedAt: Date,
 ): Pick<UnitUpdateAlertEvaluation, "status" | "cycleStart" | "latestUpdate"> => {
-  const cycleStart = getCycleStart(deadlines, dueAt, activatedAt);
+  const cycleStart = getCycleStart(dueAt, activatedAt);
   const latestUpdate = getLatestUpdateInWindow(updateTimestamps, cycleStart, dueAt);
 
   if (latestUpdate) {
     return { status: "complete", cycleStart, latestUpdate };
   }
 
-  const latestAfterCycleStart = getLatestUpdateAfter(updateTimestamps, cycleStart);
-  if (latestAfterCycleStart && new Date(latestAfterCycleStart).getTime() > dueAt.getTime()) {
-    return { status: "late", cycleStart, latestUpdate: latestAfterCycleStart };
-  }
-
-  return { status: "overdue", cycleStart, latestUpdate: latestAfterCycleStart };
+  return {
+    status: "overdue",
+    cycleStart,
+    latestUpdate: getLatestUpdateAfter(updateTimestamps, cycleStart),
+  };
 };
 
 export const evaluateUnitUpdateAlert = (
@@ -97,6 +109,7 @@ export const evaluateUnitUpdateAlert = (
   now = new Date(),
 ): UnitUpdateAlertEvaluation => {
   const { activatedAt, deadlines } = buildRecurringUpdateDeadlines(rule, now);
+  const lastUpdateAt = getAbsoluteLatestUpdate(updateTimestamps);
 
   if (deadlines.length === 0) {
     return {
@@ -104,6 +117,7 @@ export const evaluateUnitUpdateAlert = (
       dueAt: activatedAt,
       cycleStart: activatedAt,
       latestUpdate: null,
+      lastUpdateAt,
     };
   }
 
@@ -111,59 +125,42 @@ export const evaluateUnitUpdateAlert = (
   const upcomingDeadline = deadlines.find((deadline) => deadline.getTime() > now.getTime()) ?? null;
   const lastPassedDeadline = passedDeadlines[passedDeadlines.length - 1] ?? null;
 
-  if (upcomingDeadline && now.getTime() < upcomingDeadline.getTime()) {
-    const openCycleStart = getCycleStart(deadlines, upcomingDeadline, activatedAt);
-    const openCycleUpdate = getLatestUpdateInWindow(updateTimestamps, openCycleStart, upcomingDeadline);
+  if (upcomingDeadline) {
+    const openCycleStart = getCycleStart(upcomingDeadline, activatedAt);
 
-    if (openCycleUpdate) {
-      return {
-        status: "complete",
-        dueAt: upcomingDeadline,
-        cycleStart: openCycleStart,
-        latestUpdate: openCycleUpdate,
-      };
-    }
-
-    if (lastPassedDeadline) {
-      const lastCycleResult = evaluatePassedDeadline(
+    if (now.getTime() >= openCycleStart.getTime() && now.getTime() < upcomingDeadline.getTime()) {
+      const openCycleUpdate = getLatestUpdateInWindow(
         updateTimestamps,
-        deadlines,
-        lastPassedDeadline,
-        activatedAt,
+        openCycleStart,
+        upcomingDeadline,
       );
 
-      if (lastCycleResult.status === "complete") {
+      if (openCycleUpdate) {
         return {
           status: "complete",
           dueAt: upcomingDeadline,
-          cycleStart: lastCycleResult.cycleStart,
-          latestUpdate: lastCycleResult.latestUpdate,
+          cycleStart: openCycleStart,
+          latestUpdate: openCycleUpdate,
+          lastUpdateAt,
         };
       }
 
-      if (now.getTime() > lastPassedDeadline.getTime()) {
-        return {
-          status: lastCycleResult.status,
-          dueAt: lastPassedDeadline,
-          cycleStart: lastCycleResult.cycleStart,
-          latestUpdate: lastCycleResult.latestUpdate,
-        };
-      }
+      return {
+        status: "pending",
+        dueAt: upcomingDeadline,
+        cycleStart: openCycleStart,
+        latestUpdate: null,
+        lastUpdateAt,
+      };
     }
-
-    return {
-      status: "pending",
-      dueAt: upcomingDeadline,
-      cycleStart: openCycleStart,
-      latestUpdate: null,
-    };
   }
 
   if (lastPassedDeadline) {
-    const result = evaluatePassedDeadline(updateTimestamps, deadlines, lastPassedDeadline, activatedAt);
+    const result = evaluatePassedDeadline(updateTimestamps, lastPassedDeadline, activatedAt);
     return {
       ...result,
       dueAt: lastPassedDeadline,
+      lastUpdateAt,
     };
   }
 
@@ -171,7 +168,8 @@ export const evaluateUnitUpdateAlert = (
   return {
     status: "pending",
     dueAt: firstDeadline,
-    cycleStart: getCycleStart(deadlines, firstDeadline, activatedAt),
+    cycleStart: getCycleStart(firstDeadline, activatedAt),
     latestUpdate: null,
+    lastUpdateAt,
   };
 };
