@@ -235,7 +235,8 @@ export interface User {
     email: string;
     role: Role;
     unitId?: string;      // legado: primeiro tópico vinculado
-    unitIds?: string[];   // múltiplos tópicos vinculados
+    unitIds?: string[];   // múltiplos tópicos vinculados (briefing geral)
+    regionalCommandIds?: string[]; // comandos regionais atribuídos (briefing regional)
     isActive?: boolean;
 }
 
@@ -360,13 +361,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     return;
                 }
 
-                // Buscar tópicos vinculados via profile_units
-                const { data: puData } = await supabase
-                    .from('profile_units')
-                    .select('unit_id')
-                    .eq('profile_id', authUserId);
+                // Buscar tópicos vinculados via profile_units e comandos via profile_regional_commands
+                const [{ data: puData }, { data: prcData }] = await Promise.all([
+                    supabase
+                        .from('profile_units')
+                        .select('unit_id')
+                        .eq('profile_id', authUserId),
+                    supabase
+                        .from('profile_regional_commands')
+                        .select('regional_command_id')
+                        .eq('profile_id', authUserId)
+                ]);
 
                 const unitIds = puData?.map(r => r.unit_id) ?? [];
+                const regionalCommandIds = prcData?.map(r => r.regional_command_id) ?? [];
 
                 setUser({
                     id: data.id,
@@ -375,6 +383,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     role: data.role as Role,
                     unitId: unitIds[0] || data.unit_id || undefined,
                     unitIds,
+                    regionalCommandIds,
                     isActive: data.is_active
                 });
 

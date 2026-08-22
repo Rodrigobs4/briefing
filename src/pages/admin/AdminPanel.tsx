@@ -4,7 +4,7 @@ import { useAuth } from '../../store/AuthContext';
 import AdminDynamicForms from './AdminDynamicForms';
 import DynamicEditorPanel from './DynamicEditorPanel';
 import RegionalAdminDynamicForms from './RegionalAdminDynamicForms';
-import RegionalBriefing from '../regional/RegionalBriefing';
+import RegionalDynamicEditorPanel from './RegionalDynamicEditorPanel';
 
 type AdminBriefingView = 'general' | 'regional';
 
@@ -49,7 +49,7 @@ export default function AdminPanel() {
             {activeView === 'regional' && user?.role === 'admin' ? (
                 <RegionalAdminDynamicForms />
             ) : activeView === 'regional' ? (
-                <RegionalBriefing mode="editor" />
+                <RegionalDynamicEditorPanel />
             ) : user?.role === 'admin' ? (
                 <AdminDynamicForms />
             ) : (

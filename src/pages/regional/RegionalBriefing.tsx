@@ -1,72 +1,34 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useReactToPrint } from 'react-to-print';
+import { useEffect, useMemo, useState } from 'react';
 import {
-    Activity,
     BarChart3,
-    Building2,
     CalendarDays,
     Check,
     ClipboardList,
-    Database,
     Filter,
-    FileCheck2,
     FileText,
     History,
-    Layers3,
     Loader2,
-    Map as MapIcon,
     MapPinned,
     Plus,
     Printer,
     Save,
     Search,
-    Shield,
-    Square,
-    Users,
-    Wrench
+    Square
 } from 'lucide-react';
-import { useAuth, calculateFieldValue, RegionalBriefingField, RegionalBriefingSection } from '../../store/AuthContext';
-import { useSettings } from '../../store/SettingsContext';
-import { getPublicUploadUrl } from '../../utils/storageUrls';
+import { useAuth, RegionalBriefingField, RegionalBriefingSection } from '../../store/AuthContext';
 import { supabase } from '../../lib/supabase';
 import { compareTextPtBr, sortByTextPtBr } from '../../utils/textOrdering';
 import { formatBrazilianNumber, formatBrazilianNumericInput, parseBrazilianNumber } from '../../utils/brazilianNumbers';
 import { isGeneralBriefingUnit } from '../../utils/generalBriefingUnits';
-
-type RegionalBriefingPdfProps = {
-    regionName: string;
-    selectedUnits: string[];
-    selectedGroups: string[];
-};
+import RegionalReportBuilderModal from './RegionalReportBuilderModal';
+import {
+    loadSelectedRegionalCommandId,
+    saveSelectedRegionalCommandId
+} from './regionalCommandSelectionStorage';
+import { getAccessibleRegionalCommands, userCanAccessRegionalCommand } from '../../utils/regionalCommandAccess';
 
 type RegionalUpdateFrequency = 'fixed' | 'weekly' | 'monthly' | 'semester' | 'yearly' | 'custom';
 const ALPHABETICAL_UPDATE_FREQUENCIES: RegionalUpdateFrequency[] = ['yearly', 'fixed', 'custom', 'monthly', 'weekly', 'semester'];
-
-const formatValue = (field: any, value: any) => {
-    if (value === null || value === undefined || value === '') return '-';
-    if (field.type === 'percentage') return `${Number(value).toLocaleString('pt-BR')}%`;
-    if (field.type === 'currency') return formatBrazilianNumber(Number(value), true);
-    if (field.type === 'number' || field.type === 'calculated') return Number(value).toLocaleString('pt-BR');
-    return String(value);
-};
-
-const formatCollectionValue = (field: any, value: any) => {
-    if (!value) return null;
-    if (field?.type === 'number' || field?.type === 'calculated') {
-        return value.valueNumber !== null && value.valueNumber !== undefined ? Number(value.valueNumber).toLocaleString('pt-BR') : null;
-    }
-    if (field?.type === 'currency') {
-        return value.valueNumber !== null && value.valueNumber !== undefined ? formatBrazilianNumber(Number(value.valueNumber), true) : null;
-    }
-    if (field?.type === 'percentage') {
-        return value.valueNumber !== null && value.valueNumber !== undefined ? `${Number(value.valueNumber).toLocaleString('pt-BR')}%` : null;
-    }
-    if (field?.type === 'image') {
-        const total = Array.isArray(value.valueJson) ? value.valueJson.length : 0;
-        return total > 0 ? `${total} anexo(s)` : null;
-    }
-    return value.valueText || null;
-};
 
 const normalizeRegionalKey = (value: string) => value
     .toLowerCase()
@@ -224,7 +186,7 @@ const formatRegionalStoredValue = (field: RegionalBriefingField, value?: { value
             ? `${Number(value.valueNumber).toLocaleString('pt-BR')}%`
             : '-';
     }
-    if (field.fieldType === 'number') {
+    if (field.fieldType === 'number' || field.fieldType === 'calculated') {
         return value.valueNumber !== null && value.valueNumber !== undefined
             ? Number(value.valueNumber).toLocaleString('pt-BR')
             : '-';
@@ -246,603 +208,46 @@ const buildRegionalValuePayload = (field: RegionalBriefingField, rawValue: strin
     };
 };
 
-function RegionalBriefingPdfRenderer({ regionName, selectedUnits, selectedGroups }: RegionalBriefingPdfProps) {
-    const { units, dataGroups, fields, entries, getValuesForEntry, collectionItems, getValuesForItem } = useAuth();
-    const { settings } = useSettings();
+const resolveRegionalCalculationSources = (config: any): string[] => {
+    if (!config || typeof config !== 'object') return [];
+    if (Array.isArray(config.sourceFieldIds)) return config.sourceFieldIds.filter((item: unknown): item is string => typeof item === 'string');
+    if (Array.isArray(config.fields)) return config.fields.filter((item: unknown): item is string => typeof item === 'string');
+    return [];
+};
 
-    const logoUrl = settings?.logo_path ? getPublicUploadUrl(settings.logo_path) : null;
-    const bgUrl = settings?.bg_path ? getPublicUploadUrl(settings.bg_path) : null;
-    const generatedAt = new Date();
-    const unitsToRender = units
-        .filter(unit => selectedUnits.includes(unit.id))
-        .sort((a, b) => (a.order_index ?? 999) - (b.order_index ?? 999));
-    const getGeneralCategory = (group: { unitId: string; categoryTitle?: string | null }) =>
-        units.find(unit => unit.id === group.unitId)?.reportCategoryTitle?.trim()
-        || group.categoryTitle?.trim()
-        || 'Geral';
-    const getGeneralCategoryOrder = (group: { unitId: string; categoryOrder?: number }) =>
-        units.find(unit => unit.id === group.unitId)?.reportCategoryOrder
-        ?? group.categoryOrder
-        ?? 999;
-    const selectedDataGroups = dataGroups
-        .filter(group => selectedGroups.includes(group.id) && selectedUnits.includes(group.unitId))
-        .sort((a, b) => getGeneralCategoryOrder(a) - getGeneralCategoryOrder(b) || a.order - b.order);
-    const categories = Array.from(new Set(selectedDataGroups.map(getGeneralCategory)));
-    const ascomNames = Array.from(new Set(unitsToRender.map(unit => unit.regionalAscom?.trim()).filter(Boolean) as string[]));
+const calculateRegionalFieldValue = (
+    field: RegionalBriefingField,
+    sectionFields: RegionalBriefingField[],
+    valuesByFieldId: Record<string, { valueText: string | null; valueNumber: number | null } | undefined>
+): number | null => {
+    if (field.fieldType !== 'calculated' || !field.calculationConfig) return null;
 
-    const totals = {
-        units: unitsToRender.length,
-        sections: selectedDataGroups.length,
-        records: entries.filter(entry => selectedUnits.includes(entry.unitId) && selectedGroups.includes(entry.dataGroupId)).length,
-        collections: collectionItems.filter(item => selectedUnits.includes(item.unitId) && selectedGroups.includes(item.dataGroupId) && item.status !== 'archived').length
-    };
-    const categoryIcons = [Users, Activity, Shield, ClipboardList, Building2, Wrench, FileCheck2, Database];
+    const sources = resolveRegionalCalculationSources(field.calculationConfig);
+    if (sources.length === 0) return null;
 
-    const consolidatedByCategory = categories.map(category => {
-        const categoryGroups = selectedDataGroups.filter(group => getGeneralCategory(group) === category);
-        const sectionMap = new Map<string, {
-            title: string;
-            metrics: Map<string, { label: string; type: string; values: number[]; texts: string[]; units: Set<string> }>;
-            records: Array<{ unit: string; title: string; details: string; updatedAt: string }>;
-        }>();
-
-        categoryGroups.forEach(group => {
-            const unit = units.find(item => item.id === group.unitId);
-            const sectionKey = normalizeRegionalKey(group.title);
-            const section = sectionMap.get(sectionKey) ?? {
-                title: group.title,
-                metrics: new Map(),
-                records: [] as Array<{ unit: string; title: string; details: string; updatedAt: string }>
-            };
-
-            if (group.mode === 'collection') {
-                collectionItems
-                    .filter(item => item.unitId === group.unitId && item.dataGroupId === group.id && item.status !== 'archived')
-                    .sort((a, b) => (a.orderIndex ?? 999) - (b.orderIndex ?? 999) || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-                    .forEach(item => {
-                        const values = getValuesForItem(item.id)
-                            .map((fieldValue: any) => ({ value: fieldValue, field: fields.find(field => field.id === fieldValue.fieldId) }))
-                            .filter(({ field }) => field);
-                        const title = values.find(({ field, value }) => field?.type === 'text' && value.valueText)?.value.valueText || 'Registro';
-                        const details = values
-                            .map(({ field, value }) => {
-                                const formatted = formatCollectionValue(field, value);
-                                return formatted ? `${field?.name}: ${formatted}` : null;
-                            })
-                            .filter(Boolean)
-                            .join(' | ');
-
-                        section.records.push({
-                            unit: unit?.name || 'Unidade',
-                            title,
-                            details: details || 'Sem informações preenchidas.',
-                            updatedAt: new Date(item.updatedAt).toLocaleDateString('pt-BR')
-                        });
-                    });
-            } else {
-                const entry = entries
-                    .filter(item => item.unitId === group.unitId && item.dataGroupId === group.id)
-                    .sort((a, b) => (b.referenceYear ?? -1) - (a.referenceYear ?? -1) || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
-                const values = entry ? getValuesForEntry(entry.id) : [];
-                const groupFields = fields.filter(field => field.dataGroupId === group.id && field.isActive && field.type !== 'image').sort((a, b) => a.order - b.order);
-
-                groupFields.forEach(field => {
-                    const fieldValue = values.find(value => value.fieldId === field.id);
-                    let rawValue = fieldValue ? fieldValue.value : null;
-                    if ((rawValue === null || rawValue === undefined || rawValue === '') && field.type === 'calculated') {
-                        const formData = values.reduce((acc, current) => {
-                            acc[current.fieldId] = current.value;
-                            return acc;
-                        }, {} as Record<string, any>);
-                        rawValue = calculateFieldValue(field, formData, fields, true);
-                    }
-
-                    if (rawValue === null || rawValue === undefined || rawValue === '') return;
-
-                    const metricKey = normalizeRegionalKey(field.name);
-                    const metric = section.metrics.get(metricKey) ?? {
-                        label: field.name,
-                        type: field.type,
-                        values: [],
-                        texts: [],
-                        units: new Set<string>()
-                    };
-                    const numericValue = ['number', 'currency', 'calculated', 'percentage'].includes(field.type) ? parseRegionalNumber(rawValue) : null;
-
-                    if (numericValue !== null) {
-                        metric.values.push(numericValue);
-                    } else {
-                        metric.texts.push(`${unit?.name || 'Unidade'}: ${rawValue}`);
-                    }
-                    metric.units.add(unit?.name || 'Unidade');
-                    section.metrics.set(metricKey, metric);
-                });
-            }
-
-            sectionMap.set(sectionKey, section);
-        });
-
-        return {
-            category,
-            sections: Array.from(sectionMap.values()).map(section => ({
-                ...section,
-                metrics: Array.from(section.metrics.values())
-            }))
-        };
+    const sourceValues = sources.map(sourceKey => {
+        const sourceField = sectionFields.find(item => item.id === sourceKey || item.code === sourceKey);
+        if (!sourceField || !['number', 'currency', 'percentage', 'calculated'].includes(sourceField.fieldType)) {
+            return 0;
+        }
+        if (sourceField.fieldType === 'calculated') {
+            return calculateRegionalFieldValue(sourceField, sectionFields, valuesByFieldId) ?? 0;
+        }
+        const stored = valuesByFieldId[sourceField.id];
+        return stored?.valueNumber !== null && stored?.valueNumber !== undefined ? Number(stored.valueNumber) : 0;
     });
 
-    return (
-        <div className="regional-print-root bg-white text-slate-950 font-sans">
-            <section className="regional-cover">
-                {bgUrl && <img src={bgUrl} alt="" className="regional-cover-bg" />}
-                <div className="regional-cover-shade" />
-                <div className="regional-cover-topline">
-                    <span>Polícia Militar da Bahia</span>
-                    <span>{generatedAt.toLocaleDateString('pt-BR')}</span>
-                </div>
-                <div className="regional-cover-content">
-                    {logoUrl && <img src={logoUrl} alt="Logo" className="regional-cover-logo" />}
-                    <div className="regional-cover-badge">
-                        <Shield size={16} />
-                        Briefing de Comando Regional
-                    </div>
-                    <h1>BRIEFING</h1>
-                    <h2>REGIÃO {regionName.toUpperCase()}</h2>
-                    <p>{ascomNames.join(' • ') || 'ASCOM Regional'}</p>
-                </div>
-                <div className="regional-cover-footer">PMBA, UMA FORÇA A SERVIÇO DO CIDADÃO!</div>
-            </section>
+    const operation = field.calculationConfig.operation;
+    if (operation === 'sum') {
+        return sourceValues.reduce((acc, val) => acc + val, 0);
+    }
+    if (operation === 'subtract') {
+        if (sourceValues.length === 0) return 0;
+        return sourceValues.slice(1).reduce((acc, val) => acc - val, sourceValues[0]);
+    }
+    return null;
+};
 
-            <section className="regional-page">
-                <header className="regional-page-header">
-                    <div className="regional-page-title">
-                        <span>Briefing Regional</span>
-                        <h2>Região {regionName}</h2>
-                    </div>
-                    <div className="regional-page-date">
-                        <CalendarDays size={16} />
-                        <strong>{generatedAt.toLocaleDateString('pt-BR')}</strong>
-                    </div>
-                </header>
-
-                <div className="regional-summary-grid">
-                    <div><Users size={18} /><span>Unidades</span><strong>{totals.units}</strong></div>
-                    <div><Layers3 size={18} /><span>Seções</span><strong>{totals.sections}</strong></div>
-                    <div><BarChart3 size={18} /><span>Indicadores</span><strong>{totals.records}</strong></div>
-                    <div><ClipboardList size={18} /><span>Registros</span><strong>{totals.collections}</strong></div>
-                </div>
-
-                <div className="regional-intro-panel">
-                    <MapIcon size={18} />
-                    <div>
-                        <h3>Composição do briefing</h3>
-                        <p>Relatório consolidado com dados preenchidos pelas unidades vinculadas ao comando selecionado, mantendo a base original por unidade para conferência.</p>
-                    </div>
-                </div>
-
-                <div className="regional-map">
-                    {unitsToRender.map(unit => (
-                        <div key={unit.id}>
-                            <strong>{unit.name}</strong>
-                            <span>{unit.name}{unit.regionalAscom ? ` • ${unit.regionalAscom}` : ''}</span>
-                        </div>
-                    ))}
-                </div>
-            </section>
-
-            {categories.map((category, categoryIndex) => {
-                const categoryGroups = selectedDataGroups.filter(group => getGeneralCategory(group) === category);
-                const consolidatedCategory = consolidatedByCategory.find(item => item.category === category);
-                if (categoryGroups.length === 0) return null;
-                const CategoryIcon = categoryIcons[categoryIndex % categoryIcons.length];
-
-                return (
-                    <section key={category} className="regional-page">
-                        <div className="regional-category-header">
-                            <span><CategoryIcon size={20} /></span>
-                            <div>
-                                <h2>{category}</h2>
-                                <p>{String(categoryIndex + 1).padStart(2, '0')} • {categoryGroups.length} seção(ões) incluída(s)</p>
-                            </div>
-                        </div>
-
-                        {consolidatedCategory?.sections.map(section => (
-                            <div key={section.title} className="regional-consolidated-block">
-                                <h3>
-                                    <span className="regional-block-icon"><Activity size={15} /></span>
-                                    <span className="regional-block-label">Consolidado Regional</span>
-                                    <span className="regional-block-title">{section.title}</span>
-                                </h3>
-                                {section.metrics.length > 0 && (
-                                    <div className="regional-panel">
-                                        <h4><BarChart3 size={13} />Indicadores compostos da região</h4>
-                                        <table>
-                                            <thead>
-                                                <tr>
-                                                    <th>Indicador</th>
-                                                    <th>Resultado regional</th>
-                                                    <th>Base</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {section.metrics.map(metric => {
-                                                    const isPercentage = metric.type === 'percentage';
-                                                    const isCurrency = metric.type === 'currency';
-                                                    const numericTotal = metric.values.reduce((sum, item) => sum + item, 0);
-                                                    const value = metric.values.length > 0
-                                                        ? (isPercentage
-                                                            ? `${(numericTotal / metric.values.length).toLocaleString('pt-BR')}%`
-                                                            : isCurrency
-                                                                ? formatBrazilianNumber(numericTotal, true)
-                                                                : numericTotal.toLocaleString('pt-BR'))
-                                                        : metric.texts.join(' | ');
-
-                                                    return (
-                                                        <tr key={metric.label}>
-                                                            <td>{metric.label}</td>
-                                                            <td>{value || '-'}</td>
-                                                            <td>{metric.units.size} unidade(s)</td>
-                                                        </tr>
-                                                    );
-                                                })}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                )}
-
-                                {section.records.length > 0 && (
-                                    <div className="regional-panel">
-                                        <h4><ClipboardList size={13} />Registros consolidados da região</h4>
-                                        <table>
-                                            <thead>
-                                                <tr>
-                                                    <th>Unidade</th>
-                                                    <th>Registro</th>
-                                                    <th>Informações</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {section.records.map((record, index) => (
-                                                    <tr key={`${record.title}-${index}`}>
-                                                        <td>{record.unit}</td>
-                                                        <td>{record.title}</td>
-                                                        <td>{record.details}</td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                )}
-                            </div>
-                        ))}
-
-                        <div className="regional-detail-title">Base de dados por unidade</div>
-
-                        {unitsToRender.map(unit => {
-                            const groupsForUnit = categoryGroups.filter(group => group.unitId === unit.id);
-                            if (groupsForUnit.length === 0) return null;
-                            const unitEntries = entries.filter(entry => entry.unitId === unit.id);
-
-                            return (
-                                <div key={unit.id} className="regional-unit-block">
-                                    <h3>
-                                        <span className="regional-unit-mark"><Building2 size={14} /></span>
-                                        {unit.name}
-                                        <span>{unit.name}</span>
-                                    </h3>
-
-                                    {groupsForUnit.map(group => {
-                                        if (group.mode === 'collection') {
-                                            const items = collectionItems
-                                                .filter(item => item.unitId === unit.id && item.dataGroupId === group.id && item.status !== 'archived')
-                                                .sort((a, b) => (a.orderIndex ?? 999) - (b.orderIndex ?? 999) || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-
-                                            if (items.length === 0) return null;
-
-                                            return (
-                                                <div key={group.id} className="regional-panel">
-                                                    <h4><ClipboardList size={13} />{group.title}</h4>
-                                                    <table>
-                                                        <thead>
-                                                            <tr>
-                                                                <th>Registro</th>
-                                                                <th>Informações</th>
-                                                                <th>Atualização</th>
-                                                            </tr>
-                                                        </thead>
-                                                        <tbody>
-                                                            {items.map(item => {
-                                                                const values = getValuesForItem(item.id)
-                                                                    .map((fieldValue: any) => ({ value: fieldValue, field: fields.find(field => field.id === fieldValue.fieldId) }))
-                                                                    .filter(({ field }) => field);
-                                                                const title = values.find(({ field, value }) => field?.type === 'text' && value.valueText)?.value.valueText || 'Registro';
-                                                                const details = values
-                                                                    .map(({ field, value }) => {
-                                                                        const formatted = formatCollectionValue(field, value);
-                                                                        return formatted ? `${field?.name}: ${formatted}` : null;
-                                                                    })
-                                                                    .filter(Boolean)
-                                                                    .join(' | ');
-
-                                                                return (
-                                                                    <tr key={item.id}>
-                                                                        <td>{title}</td>
-                                                                        <td>{details || 'Sem informações preenchidas.'}</td>
-                                                                        <td>{new Date(item.updatedAt).toLocaleDateString('pt-BR')}</td>
-                                                                    </tr>
-                                                                );
-                                                            })}
-                                                        </tbody>
-                                                    </table>
-                                                </div>
-                                            );
-                                        }
-
-                                        const groupFields = fields.filter(field => field.dataGroupId === group.id && field.isActive && field.type !== 'image').sort((a, b) => a.order - b.order);
-                                        if (groupFields.length === 0) return null;
-                                        const entry = unitEntries
-                                            .filter(item => item.dataGroupId === group.id)
-                                            .sort((a, b) => (b.referenceYear ?? -1) - (a.referenceYear ?? -1) || new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())[0];
-                                        const values = entry ? getValuesForEntry(entry.id) : [];
-
-                                        return (
-                                            <div key={group.id} className="regional-panel">
-                                                <h4><BarChart3 size={13} />{group.title}</h4>
-                                                <table>
-                                                    <thead>
-                                                        <tr>
-                                                            <th>Indicador</th>
-                                                            <th>Consolidado</th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody>
-                                                        {groupFields.map(field => {
-                                                            const fieldValue = values.find(value => value.fieldId === field.id);
-                                                            let value = fieldValue ? fieldValue.value : null;
-                                                            if ((value === null || value === undefined || value === '') && field.type === 'calculated') {
-                                                                const formData = values.reduce((acc, current) => {
-                                                                    acc[current.fieldId] = current.value;
-                                                                    return acc;
-                                                                }, {} as Record<string, any>);
-                                                                value = calculateFieldValue(field, formData, fields, true);
-                                                            }
-
-                                                            return (
-                                                                <tr key={field.id}>
-                                                                    <td>{field.name}</td>
-                                                                    <td>{formatValue(field, value)}</td>
-                                                                </tr>
-                                                            );
-                                                        })}
-                                                    </tbody>
-                                                </table>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            );
-                        })}
-                    </section>
-                );
-            })}
-
-            <style>{`
-                @media print {
-                    @page { size: A4 portrait; margin: 0; }
-                    body { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-                    .regional-cover, .regional-page { break-after: page; page-break-after: always; }
-                    .regional-panel, .regional-unit-block, tr { break-inside: avoid; page-break-inside: avoid; }
-                }
-                .regional-print-root {
-                    width: 100%;
-                    color: #14213d;
-                    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-                }
-                .regional-cover {
-                    position: relative;
-                    min-height: 297mm;
-                    overflow: hidden;
-                    background: #14213d;
-                    color: white;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    text-align: center;
-                }
-                .regional-cover-bg {
-                    position: absolute;
-                    inset: 0;
-                    width: 100%;
-                    height: 100%;
-                    object-fit: cover;
-                    filter: saturate(0.82) contrast(1.04);
-                    opacity: 0.5;
-                }
-                .regional-cover-shade {
-                    position: absolute;
-                    inset: 0;
-                    background:
-                        linear-gradient(180deg, rgba(20, 33, 61, 0.78), rgba(20, 33, 61, 0.92)),
-                        linear-gradient(135deg, rgba(181, 137, 0, 0.28), rgba(20, 33, 61, 0) 46%);
-                }
-                .regional-cover-topline {
-                    position: absolute;
-                    z-index: 1;
-                    top: 22mm;
-                    left: 20mm;
-                    right: 20mm;
-                    display: flex;
-                    justify-content: space-between;
-                    border-bottom: 1px solid rgba(255, 255, 255, 0.28);
-                    padding-bottom: 7mm;
-                    font-size: 9px;
-                    font-weight: 900;
-                    letter-spacing: 0.16em;
-                    text-transform: uppercase;
-                    color: rgba(255, 255, 255, 0.82);
-                }
-                .regional-cover-content { position: relative; z-index: 1; margin-top: -14mm; max-width: 168mm; }
-                .regional-cover-logo { width: 88px; height: 88px; object-fit: contain; margin: 0 auto 18px; }
-                .regional-cover-badge {
-                    display: inline-flex;
-                    align-items: center;
-                    gap: 8px;
-                    border: 1px solid rgba(255, 255, 255, 0.32);
-                    border-radius: 999px;
-                    padding: 8px 14px;
-                    color: #f5d36a;
-                    font-size: 10px;
-                    font-weight: 950;
-                    letter-spacing: 0.14em;
-                    text-transform: uppercase;
-                    margin-bottom: 24px;
-                }
-                .regional-cover h1 { font-size: 56px; letter-spacing: 0.22em; font-weight: 300; margin: 0 0 16px; }
-                .regional-cover h2 { font-size: 27px; font-weight: 950; margin: 0; letter-spacing: 0.03em; }
-                .regional-cover p { font-size: 11px; font-weight: 850; letter-spacing: 0.14em; text-transform: uppercase; margin-top: 18px; color: rgba(255, 255, 255, 0.84); }
-                .regional-cover-footer { position: absolute; z-index: 1; bottom: 24mm; left: 0; right: 0; font-size: 11px; font-weight: 900; letter-spacing: 0.12em; color: rgba(255, 255, 255, 0.86); }
-                .regional-page { min-height: 297mm; padding: 17mm; background: #f6f7f2; }
-                .regional-page-header {
-                    display: flex;
-                    align-items: flex-end;
-                    justify-content: space-between;
-                    border-bottom: 3px solid #14213d;
-                    padding-bottom: 10px;
-                    margin-bottom: 18px;
-                }
-                .regional-page-title span { display: block; color: #8a6f19; font-size: 10px; font-weight: 950; text-transform: uppercase; letter-spacing: 0.16em; }
-                .regional-page-title h2 { margin: 4px 0 0; font-size: 27px; text-transform: uppercase; font-weight: 950; color: #14213d; }
-                .regional-page-date { display: flex; align-items: center; gap: 7px; color: #596579; font-size: 13px; font-weight: 900; }
-                .regional-summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
-                .regional-summary-grid div {
-                    background: #ffffff;
-                    border: 1px solid #d8deea;
-                    border-radius: 8px;
-                    padding: 13px;
-                    position: relative;
-                    overflow: hidden;
-                }
-                .regional-summary-grid div::before {
-                    content: "";
-                    position: absolute;
-                    inset: 0 auto 0 0;
-                    width: 4px;
-                    background: #b58900;
-                }
-                .regional-summary-grid svg { color: #8a6f19; margin-bottom: 8px; }
-                .regional-summary-grid span { display: block; color: #596579; font-size: 8.5px; text-transform: uppercase; font-weight: 950; letter-spacing: 0.1em; }
-                .regional-summary-grid strong { display: block; color: #14213d; font-size: 31px; font-weight: 950; line-height: 1; margin-top: 5px; }
-                .regional-intro-panel {
-                    display: flex;
-                    align-items: flex-start;
-                    gap: 12px;
-                    background: #14213d;
-                    color: white;
-                    border-radius: 8px;
-                    padding: 13px 14px;
-                    margin-bottom: 14px;
-                }
-                .regional-intro-panel svg { color: #f5d36a; flex: 0 0 auto; margin-top: 1px; }
-                .regional-intro-panel h3 { margin: 0 0 4px; font-size: 12px; font-weight: 950; text-transform: uppercase; letter-spacing: 0.06em; }
-                .regional-intro-panel p { margin: 0; font-size: 10.5px; line-height: 1.55; color: rgba(255, 255, 255, 0.82); font-weight: 700; }
-                .regional-map { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
-                .regional-map div { background: white; border: 1px solid #d8deea; border-left: 5px solid #b58900; border-radius: 8px; padding: 10px; }
-                .regional-map strong { display: block; font-size: 12px; font-weight: 950; text-transform: uppercase; color: #14213d; }
-                .regional-map span { display: block; color: #596579; font-size: 10px; font-weight: 800; margin-top: 3px; line-height: 1.35; }
-                .regional-category-header {
-                    display: flex;
-                    align-items: center;
-                    gap: 12px;
-                    background: #ffffff;
-                    border: 1px solid #d8deea;
-                    border-left: 7px solid #b58900;
-                    border-radius: 8px;
-                    padding: 13px;
-                    margin-bottom: 16px;
-                }
-                .regional-category-header > span {
-                    width: 40px;
-                    height: 40px;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    background: #14213d;
-                    color: #f5d36a;
-                    border-radius: 8px;
-                    font-weight: 950;
-                }
-                .regional-category-header h2 { margin: 0; font-size: 20px; font-weight: 950; text-transform: uppercase; color: #14213d; }
-                .regional-category-header p { margin: 4px 0 0; color: #596579; font-size: 9.5px; font-weight: 950; text-transform: uppercase; letter-spacing: 0.1em; }
-                .regional-unit-block { margin-bottom: 16px; }
-                .regional-unit-block h3 {
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                    background: #14213d;
-                    color: white;
-                    border-radius: 8px 8px 0 0;
-                    padding: 10px 12px;
-                    font-size: 13px;
-                    font-weight: 950;
-                    text-transform: uppercase;
-                    margin: 0;
-                }
-                .regional-unit-block h3 > span:not(.regional-unit-mark) { color: #cbd5e1; font-size: 9.5px; font-weight: 800; margin-left: 2px; text-transform: none; }
-                .regional-unit-mark { display: inline-flex; color: #f5d36a; }
-                .regional-consolidated-block { margin-bottom: 16px; break-inside: avoid; page-break-inside: avoid; }
-                .regional-consolidated-block h3 {
-                    display: flex;
-                    align-items: center;
-                    gap: 8px;
-                    background: #8a6f19;
-                    color: white;
-                    border-radius: 8px 8px 0 0;
-                    padding: 11px 12px;
-                    font-size: 13px;
-                    font-weight: 950;
-                    text-transform: uppercase;
-                    margin: 0;
-                }
-                .regional-block-icon { display: inline-flex; color: #fff4c7; }
-                .regional-block-label { font-size: 12px; font-weight: 950; }
-                .regional-block-title { color: #fff4c7; font-size: 9.5px; font-weight: 900; margin-left: auto; opacity: 0.95; }
-                .regional-detail-title {
-                    margin: 18px 0 10px;
-                    padding-top: 12px;
-                    border-top: 2px solid #d8deea;
-                    color: #596579;
-                    font-size: 9.5px;
-                    font-weight: 950;
-                    text-transform: uppercase;
-                    letter-spacing: 0.16em;
-                }
-                .regional-panel {
-                    background: white;
-                    border: 1px solid #d8deea;
-                    border-top: 0;
-                    padding: 11px;
-                }
-                .regional-panel h4 {
-                    display: flex;
-                    align-items: center;
-                    gap: 6px;
-                    margin: 0 0 8px;
-                    font-size: 11.5px;
-                    font-weight: 950;
-                    color: #14213d;
-                    text-transform: uppercase;
-                    letter-spacing: 0.03em;
-                }
-                .regional-panel h4 svg { color: #8a6f19; }
-                .regional-panel table { width: 100%; border-collapse: collapse; table-layout: fixed; overflow: hidden; border-radius: 7px; }
-                .regional-panel th { background: #14213d; color: white; text-align: left; font-size: 8.7px; text-transform: uppercase; letter-spacing: 0.08em; padding: 8px; }
-                .regional-panel td { border: 1px solid #e3e8f0; padding: 8px; font-size: 10.3px; font-weight: 750; color: #24324a; vertical-align: top; line-height: 1.38; }
-                .regional-panel tbody tr:nth-child(even) td { background: #fbfcfe; }
-                .regional-panel td:first-child { width: 34%; background: #f6f7f2; color: #14213d; }
-            `}</style>
-        </div>
-    );
-}
 
 type RegionalBriefingProps = {
     mode?: 'full' | 'editor';
@@ -852,7 +257,6 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
     const isEditorMode = mode === 'editor';
     const {
         units: allUnits,
-        dataGroups,
         user,
         regionalCommands,
         unitRegionalCommands,
@@ -868,15 +272,14 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
     const visibleUnits = user?.role === 'editor'
         ? generalUnits.filter(unit => (user.unitIds && user.unitIds.length > 0 ? user.unitIds.includes(unit.id) : unit.id === user.unitId))
         : generalUnits;
-    const activeRegionalCommands = regionalCommands
-        .filter(command => command.isActive)
-        .sort((a, b) => compareTextPtBr(a.name, b.name));
+    const activeRegionalCommands = getAccessibleRegionalCommands(regionalCommands, user);
     const legacyRegionOptions = Array.from(new Set(visibleUnits.map(unit => unit.regionName?.trim()).filter(Boolean) as string[])).sort(compareTextPtBr);
     const regionOptions = activeRegionalCommands.length > 0
         ? activeRegionalCommands.map(command => command.name).sort(compareTextPtBr)
         : legacyRegionOptions;
     const [selectedRegion, setSelectedRegion] = useState(regionOptions[0] || 'Todas as regiões');
-    const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
+    const [hasLoadedSavedCommand, setHasLoadedSavedCommand] = useState(false);
+    const [selectedSections, setSelectedSections] = useState<string[]>([]);
     const [activeUpdateFrequency, setActiveUpdateFrequency] = useState<RegionalUpdateFrequency>('weekly');
     const [periodYear, setPeriodYear] = useState(currentYear());
     const [periodMonth, setPeriodMonth] = useState(new Date().getMonth() + 1);
@@ -894,7 +297,19 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
     const [activeRegionalTab, setActiveRegionalTab] = useState<'overview' | 'history' | 'fill' | 'preview'>('fill');
     const [activeFillCategory, setActiveFillCategory] = useState<string>('');
     const [activeRegionalSectionId, setActiveRegionalSectionId] = useState<string | null>(null);
-    const printRef = useRef<HTMLDivElement>(null);
+    const [isReportBuilderOpen, setIsReportBuilderOpen] = useState(false);
+
+    useEffect(() => {
+        if (hasLoadedSavedCommand || activeRegionalCommands.length === 0) return;
+        const savedCommandId = loadSelectedRegionalCommandId();
+        const savedCommand = savedCommandId
+            ? activeRegionalCommands.find(command => command.id === savedCommandId)
+            : null;
+        if (savedCommand) {
+            setSelectedRegion(savedCommand.name);
+        }
+        setHasLoadedSavedCommand(true);
+    }, [activeRegionalCommands, hasLoadedSavedCommand]);
 
     useEffect(() => {
         if (selectedRegion === 'Todas as regiões' && regionOptions.length > 0) {
@@ -905,6 +320,15 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
             setSelectedRegion(regionOptions[0] || 'Todas as regiões');
         }
     }, [regionOptions, selectedRegion]);
+
+    const handleSelectedRegionChange = (regionName: string) => {
+        setSelectedRegion(regionName);
+        setSelectedSections([]);
+        const command = activeRegionalCommands.find(item => item.name === regionName);
+        if (command) {
+            saveSelectedRegionalCommandId(command.id);
+        }
+    };
 
     const unitsForRegion = useMemo(() => {
         let source = visibleUnits;
@@ -936,13 +360,6 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
     }, [activeRegionalCommands, unitRegionalCommands, visibleUnits, selectedRegion]);
 
     const unitIds = unitsForRegion.map(unit => unit.id);
-    const regionGroups = dataGroups
-        .filter(group => unitIds.includes(group.unitId))
-        .sort((a, b) => {
-            const firstUnit = unitsForRegion.find(unit => unit.id === a.unitId);
-            const secondUnit = unitsForRegion.find(unit => unit.id === b.unitId);
-            return (firstUnit?.reportCategoryOrder ?? a.categoryOrder ?? 999) - (secondUnit?.reportCategoryOrder ?? b.categoryOrder ?? 999) || a.order - b.order;
-        });
     const catalogSections = regionalBriefingSections
         .filter(section => section.isActive)
         .sort((a, b) => a.categoryOrder - b.categoryOrder || a.orderIndex - b.orderIndex);
@@ -974,8 +391,14 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
     const visibleRegionalSections = [...visibleSnapshotSections, ...visibleCollectionSections]
         .sort((a, b) => a.categoryOrder - b.categoryOrder || a.orderIndex - b.orderIndex);
     const activeRegionalSection = visibleRegionalSections.find(section => section.id === activeRegionalSectionId) ?? visibleRegionalSections[0] ?? null;
-    const selectedGroupIds = selectedGroups.length > 0 ? selectedGroups.filter(id => regionGroups.some(group => group.id === id)) : regionGroups.map(group => group.id);
-    const isPrintable = unitIds.length > 0 && selectedGroupIds.length > 0;
+    const selectedSectionIds = selectedSections.length > 0
+        ? selectedSections.filter(id => catalogSections.some(section => section.id === id))
+        : catalogSections.map(section => section.id);
+    const isPrintable = Boolean(selectedCommand)
+        && Boolean(referenceStartDate)
+        && Boolean(referenceEndDate)
+        && referenceEndDate >= referenceStartDate
+        && selectedSectionIds.length > 0;
 
     const regionalHistoryItems = useMemo(() => {
         if (!selectedCommand) return [];
@@ -1065,11 +488,6 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
         }
     }, [activeRegionalSectionId, visibleRegionalSections]);
 
-    const handlePrint = useReactToPrint({
-        contentRef: printRef,
-        documentTitle: `Briefing Regional - ${selectedRegion}`
-    });
-
     const applyHistoryPeriod = (item: { frequency: RegionalUpdateFrequency; startDate: string; endDate: string }) => {
         setActiveUpdateFrequency(item.frequency);
         setSectionFilterSearch('');
@@ -1093,10 +511,10 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
         setActiveRegionalTab('fill');
     };
 
-    const toggleGroup = (groupId: string) => {
-        setSelectedGroups(prev => {
-            const current = prev.length > 0 ? prev : regionGroups.map(group => group.id);
-            return current.includes(groupId) ? current.filter(id => id !== groupId) : [...current, groupId];
+    const toggleSection = (sectionId: string) => {
+        setSelectedSections(prev => {
+            const current = prev.length > 0 ? prev : catalogSections.map(section => section.id);
+            return current.includes(sectionId) ? current.filter(id => id !== sectionId) : [...current, sectionId];
         });
     };
 
@@ -1116,9 +534,42 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
 
     const getSnapshotValue = (sectionId: string, field: RegionalBriefingField) => {
         const draft = draftValues[sectionId]?.[field.id];
-        if (draft !== undefined) return draft;
+        if (draft !== undefined && field.fieldType !== 'calculated') return draft;
         const entry = findSnapshotEntry(sectionId);
-        const storedValue = entry ? regionalBriefingValues.find(value => value.entryId === entry.id && value.fieldId === field.id) : undefined;
+        const sectionFields = getFieldsForSection(sectionId);
+        const valuesByFieldId = entry
+            ? regionalBriefingValues
+                .filter(value => value.entryId === entry.id)
+                .reduce((acc, value) => {
+                    acc[value.fieldId] = value;
+                    return acc;
+                }, {} as Record<string, { valueText: string | null; valueNumber: number | null } | undefined>)
+            : {};
+
+        // Overlay draft edits so calculated fields update live while filling.
+        const sectionDraft = draftValues[sectionId] ?? {};
+        Object.entries(sectionDraft).forEach(([fieldId, rawValue]) => {
+            const sourceField = sectionFields.find(item => item.id === fieldId);
+            if (!sourceField || sourceField.fieldType === 'calculated') return;
+            if (['number', 'percentage', 'currency'].includes(sourceField.fieldType)) {
+                valuesByFieldId[fieldId] = {
+                    valueText: null,
+                    valueNumber: parseRegionalNumber(rawValue)
+                };
+            } else {
+                valuesByFieldId[fieldId] = {
+                    valueText: rawValue || null,
+                    valueNumber: null
+                };
+            }
+        });
+
+        if (field.fieldType === 'calculated') {
+            const calculated = calculateRegionalFieldValue(field, sectionFields, valuesByFieldId);
+            return calculated === null ? '' : formatBrazilianNumber(calculated, false);
+        }
+
+        const storedValue = valuesByFieldId[field.id];
         return getRegionalStoredValue(field, storedValue);
     };
 
@@ -1145,6 +596,10 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
     const requireRegionalContext = () => {
         if (!selectedCommand) {
             setSaveMessage({ type: 'error', text: 'Selecione um Comando Regional específico antes de salvar.' });
+            return false;
+        }
+        if (!userCanAccessRegionalCommand(user, selectedCommand.id)) {
+            setSaveMessage({ type: 'error', text: 'Você não tem permissão para editar este Comando Regional.' });
             return false;
         }
         if (!referenceStartDate || !referenceEndDate || referenceEndDate < referenceStartDate) {
@@ -1290,6 +745,18 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
     const filledSnapshotCount = snapshotSections.filter(section => findSnapshotEntry(section.id)).length;
     const filledCollectionCount = collectionSections.reduce((total, section) => total + collectionItemsForSection(section.id).length, 0);
 
+    if (user?.role === 'editor' && activeRegionalCommands.length === 0) {
+        return (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-6 py-8 text-center">
+                <MapPinned className="w-10 h-10 text-amber-600 mx-auto mb-3" />
+                <h3 className="text-lg font-black text-amber-900">Nenhum Comando Regional atribuído</h3>
+                <p className="text-sm font-medium text-amber-800 mt-2 max-w-lg mx-auto">
+                    Solicite ao administrador o acesso ao Comando Regional responsável pelo seu preenchimento.
+                </p>
+            </div>
+        );
+    }
+
     return (
         <div className={isEditorMode ? '' : 'space-y-6'}>
             <div className={isEditorMode ? '' : 'bg-white rounded-2xl border border-pm-secondary/15 shadow-sm p-6'}>
@@ -1303,16 +770,16 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
                                 </div>
                                 <h2 className="text-3xl font-black text-pm-dark tracking-tight mt-1">Briefing do Comando Regional</h2>
                                 <p className="text-sm text-pm-secondary mt-1 max-w-2xl">
-                                    Componha o briefing preenchido pelo preposto do Comando Regional, com unidades informadas e indicadores previstos no modelo.
+                                    Componha o briefing do Comando Regional com os indicadores do catálogo regional, no mesmo fluxo de preenchimento por período e seção.
                                 </p>
                             </div>
                             <button
-                                onClick={() => handlePrint()}
+                                onClick={() => setIsReportBuilderOpen(true)}
                                 disabled={!isPrintable}
                                 className="px-6 py-3 rounded-xl bg-red-600 text-white text-sm font-black shadow-sm hover:bg-red-700 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                             >
                                 <Printer className="w-4 h-4" />
-                                Imprimir briefing
+                                Gerenciador de impressão
                             </button>
                         </div>
 
@@ -1350,10 +817,7 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
                             <label className="text-[10px] font-black uppercase tracking-widest text-pm-secondary">Comando Regional</label>
                             <select
                                 value={selectedRegion}
-                                onChange={event => {
-                                    setSelectedRegion(event.target.value);
-                                    setSelectedGroups([]);
-                                }}
+                                onChange={event => handleSelectedRegionChange(event.target.value)}
                                 className="mt-1 w-full border border-pm-secondary/20 rounded-xl px-3 py-3 text-sm font-bold text-pm-dark bg-white outline-none focus:ring-2 focus:ring-pm-primary/20"
                             >
                                 <option>Todas as regiões</option>
@@ -1369,11 +833,11 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
                             </div>
                             <div className="bg-pm-light rounded-xl p-3 border border-pm-secondary/10">
                                 <span className="text-[9px] font-black text-pm-secondary uppercase">Seções</span>
-                                <strong className="block text-xl text-pm-dark">{selectedGroupIds.length || catalogSections.length}</strong>
+                                <strong className="block text-xl text-pm-dark">{selectedSectionIds.length}</strong>
                             </div>
                             <div className="bg-pm-light rounded-xl p-3 border border-pm-secondary/10">
-                                <span className="text-[9px] font-black text-pm-secondary uppercase">Modelos</span>
-                                <strong className="block text-xl text-pm-dark">{regionOptions.length}</strong>
+                                <span className="text-[9px] font-black text-pm-secondary uppercase">OPMs</span>
+                                <strong className="block text-xl text-pm-dark">{unitIds.length}</strong>
                             </div>
                         </div>
                     </aside>
@@ -1417,41 +881,28 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
                                 <h3 className="text-sm font-black text-pm-dark uppercase">Seções incluídas</h3>
                             </div>
                             <div className="p-3 space-y-2 max-h-[420px] overflow-y-auto custom-scrollbar">
-                                {regionGroups.map(group => {
-                                    const isSelected = selectedGroupIds.includes(group.id);
-                                    const unit = allUnits.find(item => item.id === group.unitId);
+                                {catalogSections.map(section => {
+                                    const isSelected = selectedSectionIds.includes(section.id);
                                     return (
                                         <button
-                                            key={group.id}
-                                            onClick={() => toggleGroup(group.id)}
+                                            key={section.id}
+                                            onClick={() => toggleSection(section.id)}
                                             className={`w-full p-3 rounded-xl border text-left flex gap-3 transition-colors ${isSelected ? 'bg-pm-primary/10 border-pm-primary/35' : 'bg-white border-pm-secondary/10 hover:bg-pm-light/60'}`}
                                         >
                                             <span className={`w-5 h-5 rounded border flex items-center justify-center shrink-0 mt-0.5 ${isSelected ? 'bg-pm-primary border-pm-primary text-white' : 'border-pm-secondary/30'}`}>
                                                 {isSelected ? <Check className="w-3 h-3" /> : <Square className="w-3 h-3 opacity-0" />}
                                             </span>
                                             <span className="min-w-0">
-                                                <span className="block text-sm font-black text-pm-dark truncate">{group.title}</span>
+                                                <span className="block text-sm font-black text-pm-dark truncate">{section.title}</span>
                                                 <span className="block text-[10px] uppercase tracking-wider font-bold text-pm-secondary mt-0.5">
-                                                    {unit?.reportCategoryTitle?.trim() || group.categoryTitle?.trim() || 'Geral'} • {unit?.name || 'Unidade'}
+                                                    {section.categoryTitle} • {section.mode === 'collection' ? 'Registros múltiplos' : 'Indicador fixo'}
                                                 </span>
                                             </span>
                                         </button>
                                     );
                                 })}
-                                {regionGroups.length === 0 && catalogSections.length > 0 && (
-                                    <div className="space-y-2">
-                                        {catalogSections.map(section => (
-                                            <div key={section.id} className="p-3 rounded-xl border border-pm-secondary/10 bg-[#fbfaf6]">
-                                                <p className="text-sm font-black text-pm-dark">{section.title}</p>
-                                                <p className="text-[10px] uppercase tracking-wider font-bold text-pm-secondary mt-0.5">
-                                                    {section.categoryTitle} • {section.mode === 'collection' ? 'Registros múltiplos' : 'Indicador fixo'}
-                                                </p>
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-                                {regionGroups.length === 0 && catalogSections.length === 0 && (
-                                    <p className="text-sm text-pm-secondary text-center py-8">Nenhuma seção cadastrada para as unidades filtradas.</p>
+                                {catalogSections.length === 0 && (
+                                    <p className="text-sm text-pm-secondary text-center py-8">Nenhuma seção cadastrada no catálogo regional.</p>
                                 )}
                             </div>
                         </section>
@@ -1571,10 +1022,7 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
                                 <label className="text-[10px] font-black uppercase tracking-widest text-pm-secondary">Região</label>
                                 <select
                                     value={selectedRegion}
-                                    onChange={event => {
-                                        setSelectedRegion(event.target.value);
-                                        setSelectedGroups([]);
-                                    }}
+                                    onChange={event => handleSelectedRegionChange(event.target.value)}
                                     className="mt-1 w-full border border-pm-secondary/20 rounded-xl px-3 py-2.5 text-sm font-bold text-pm-dark bg-white outline-none focus:ring-2 focus:ring-pm-primary/20"
                                 >
                                     {regionOptions.map(region => (
@@ -1816,7 +1264,8 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
                             <main className="min-w-0">
                                 {activeRegionalSection ? (() => {
                                     const section = activeRegionalSection;
-                                    const sectionFields = getFieldsForSection(section.id).filter(field => field.fieldType !== 'calculated');
+                                    const sectionFields = getFieldsForSection(section.id);
+                                    const editableFields = sectionFields.filter(field => field.fieldType !== 'calculated');
                                     const isSaving = savingSectionId === section.id;
                                     const entry = section.mode === 'snapshot' ? findSnapshotEntry(section.id) : null;
                                     const items = section.mode === 'collection' ? collectionItemsForSection(section.id) : [];
@@ -1845,9 +1294,12 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
 
                                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                                     {sectionFields.map(field => {
+                                                        const isCalculated = field.fieldType === 'calculated';
                                                         const value = section.mode === 'snapshot'
                                                             ? getSnapshotValue(section.id, field)
-                                                            : collectionDraftValues[section.id]?.[field.id] ?? '';
+                                                            : isCalculated
+                                                                ? ''
+                                                                : collectionDraftValues[section.id]?.[field.id] ?? '';
                                                         const isLongText = field.fieldType === 'textarea';
                                                         const onChange = (nextValue: string) => section.mode === 'snapshot'
                                                             ? updateSnapshotDraft(
@@ -1868,23 +1320,23 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
                                                         return (
                                                             <label key={field.id} className={`${isLongText ? 'md:col-span-2' : ''} block`}>
                                                                 <span className="text-[10px] font-black uppercase tracking-widest text-pm-secondary">
-                                                                    {field.label}{field.isRequired ? ' *' : ''}
+                                                                    {field.label}{field.isRequired ? ' *' : ''}{isCalculated ? ' (calculado)' : ''}
                                                                 </span>
                                                                 {isLongText ? (
                                                                     <textarea
                                                                         value={value}
                                                                         onChange={event => onChange(event.target.value)}
                                                                         rows={4}
-                                                                        disabled={!selectedCommand}
+                                                                        disabled={!selectedCommand || isCalculated}
                                                                         className="mt-1 w-full resize-y border border-pm-secondary/20 rounded-xl px-3 py-2.5 text-sm font-semibold text-pm-dark bg-white outline-none focus:ring-2 focus:ring-pm-primary/20 disabled:bg-slate-50 disabled:text-slate-400"
                                                                     />
                                                                 ) : (
                                                                     <input
-                                                                        type={['number', 'percentage', 'currency'].includes(field.fieldType) ? 'text' : field.fieldType === 'date' ? 'date' : 'text'}
-                                                                        inputMode={['number', 'percentage', 'currency'].includes(field.fieldType) ? 'decimal' : undefined}
+                                                                        type={['number', 'percentage', 'currency', 'calculated'].includes(field.fieldType) ? 'text' : field.fieldType === 'date' ? 'date' : 'text'}
+                                                                        inputMode={['number', 'percentage', 'currency', 'calculated'].includes(field.fieldType) ? 'decimal' : undefined}
                                                                         value={value}
                                                                         onChange={event => onChange(event.target.value)}
-                                                                        disabled={!selectedCommand}
+                                                                        disabled={!selectedCommand || isCalculated}
                                                                         className="mt-1 w-full border border-pm-secondary/20 rounded-xl px-3 py-2.5 text-sm font-semibold text-pm-dark bg-white outline-none focus:ring-2 focus:ring-pm-primary/20 disabled:bg-slate-50 disabled:text-slate-400"
                                                                     />
                                                                 )}
@@ -1896,7 +1348,7 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
                                                 <div className="pt-4 border-t border-pm-secondary/10 flex justify-end">
                                                     <button
                                                         onClick={() => section.mode === 'snapshot' ? saveSnapshotSection(section) : addCollectionItem(section)}
-                                                        disabled={!selectedCommand || isSaving || sectionFields.length === 0}
+                                                        disabled={!selectedCommand || isSaving || editableFields.length === 0}
                                                         className={`px-5 py-3 rounded-xl text-sm font-black flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed ${section.mode === 'snapshot' ? 'bg-pm-primary text-white' : 'bg-pm-dark text-white'}`}
                                                     >
                                                         {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : section.mode === 'snapshot' ? <Save className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
@@ -1910,7 +1362,7 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
                                                         <table className="w-full text-left border-collapse">
                                                             <thead>
                                                                 <tr className="bg-pm-light">
-                                                                    {sectionFields.map(field => (
+                                                                    {editableFields.map(field => (
                                                                         <th key={field.id} className="px-3 py-2 text-[10px] font-black uppercase tracking-widest text-pm-secondary border border-pm-secondary/10">
                                                                             {field.label}
                                                                         </th>
@@ -1920,7 +1372,7 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
                                                             <tbody>
                                                                 {items.map(item => (
                                                                     <tr key={item.id}>
-                                                                        {sectionFields.map(field => {
+                                                                        {editableFields.map(field => {
                                                                             const storedValue = regionalBriefingCollectionValues.find(value => value.itemId === item.id && value.fieldId === field.id);
                                                                             return (
                                                                                 <td key={field.id} className="px-3 py-2 text-xs font-bold text-pm-dark border border-pm-secondary/10 align-top">
@@ -1979,27 +1431,23 @@ export default function RegionalBriefing({ mode = 'full' }: RegionalBriefingProp
                         Revise os números lançados no menu “Preencher dados”. Depois gere o PDF para conferência final.
                     </p>
                     <button
-                        onClick={() => handlePrint()}
+                        onClick={() => setIsReportBuilderOpen(true)}
                         disabled={!isPrintable}
                         className="px-5 py-3 rounded-xl bg-red-600 text-white text-sm font-black shadow-sm hover:bg-red-700 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
                         <Printer className="w-4 h-4" />
-                        Imprimir briefing
+                        Gerenciador de impressão
                     </button>
                 </div>
             </div>
             )}
 
-            {!isEditorMode && (
-            <div style={{ display: 'none' }}>
-                <div ref={printRef}>
-                    <RegionalBriefingPdfRenderer
-                        regionName={selectedRegion}
-                        selectedUnits={unitIds}
-                        selectedGroups={selectedGroupIds}
-                    />
-                </div>
-            </div>
+            {isReportBuilderOpen && (
+                <RegionalReportBuilderModal
+                    onClose={() => setIsReportBuilderOpen(false)}
+                    initialRegionalCommandId={selectedCommand?.id ?? null}
+                    initialSelectedSectionIds={selectedSectionIds}
+                />
             )}
         </div>
     );

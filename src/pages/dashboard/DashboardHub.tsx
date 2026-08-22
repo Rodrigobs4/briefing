@@ -1,10 +1,10 @@
 import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { BarChart3, ClipboardList, FileText, MapPinned, ShieldCheck, Sparkles, X } from "lucide-react";
+import { BarChart3, ClipboardList, FileText, MapPinned, ShieldCheck, Sparkles } from "lucide-react";
 import DashboardExecutivo from "./DashboardExecutivo";
 import RegionalDashboardView from "./RegionalDashboardView";
 import ReportBuilderModal from "./components/ReportBuilderModal";
-import RegionalBriefing from "../regional/RegionalBriefing";
+import RegionalReportBuilderModal from "../regional/RegionalReportBuilderModal";
 
 type BriefingView = "general" | "regional";
 
@@ -88,30 +88,7 @@ export default function DashboardHub() {
       )}
 
       {isReportModalOpen && activeView === "regional" && (
-        <div className="fixed inset-0 bg-pm-dark/80 backdrop-blur-sm z-[60] flex items-center justify-center p-4">
-          <div className="bg-pm-light rounded-3xl shadow-2xl w-full max-w-7xl h-[92vh] border border-white/20 overflow-hidden flex flex-col">
-            <div className="bg-white px-6 py-4 border-b border-pm-secondary/15 flex items-center justify-between gap-4 shrink-0">
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-[0.18em] text-pm-secondary">
-                  Impressão
-                </p>
-                <h3 className="text-lg font-black text-pm-dark">
-                  Briefing Regional
-                </h3>
-              </div>
-              <button
-                onClick={() => setIsReportModalOpen(false)}
-                className="w-10 h-10 rounded-xl border border-pm-secondary/15 text-pm-secondary hover:text-pm-dark hover:bg-pm-light transition-colors flex items-center justify-center"
-                aria-label="Fechar impressão regional"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto custom-scrollbar p-5">
-              <RegionalBriefing />
-            </div>
-          </div>
-        </div>
+        <RegionalReportBuilderModal onClose={() => setIsReportModalOpen(false)} />
       )}
     </div>
   );

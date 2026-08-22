@@ -1,11 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
     AlignLeft, ArrowLeft, CalendarDays, ChevronDown, ChevronUp,
-    Copy, Database, Edit2, Hash, LayoutTemplate, Plus, Percent, Save, Search,
+    Copy, Database, Edit2, Hash, LayoutTemplate, MapPinned, Plus, Percent, Save, Search,
     Trash2, Type, X
 } from 'lucide-react';
 import { useAuth, RegionalBriefingField, RegionalBriefingSection } from '../../store/AuthContext';
 import { supabase } from '../../lib/supabase';
+import {
+    loadSelectedRegionalCommandId,
+    saveSelectedRegionalCommandId
+} from '../regional/regionalCommandSelectionStorage';
+import { getAccessibleRegionalCommands } from '../../utils/regionalCommandAccess';
 
 type RegionalFieldType = RegionalBriefingField['fieldType'];
 type RegionalSectionMode = RegionalBriefingSection['mode'];
@@ -44,13 +49,69 @@ const makeCode = (value: string) => `${slugify(value)}_${crypto.randomUUID().sli
 
 export default function RegionalAdminDynamicForms() {
     const {
+        user,
+        regionalCommands,
         regionalBriefingSections,
         regionalBriefingTopics,
         regionalBriefingFields,
+        regionalBriefingEntries,
         regionalBriefingValues,
+        regionalBriefingCollectionItems,
         regionalBriefingCollectionValues,
         refreshData
     } = useAuth();
+
+    const activeRegionalCommands = useMemo(
+        () => getAccessibleRegionalCommands(regionalCommands, user),
+        [regionalCommands, user]
+    );
+
+    const [selectedRegionalCommandId, setSelectedRegionalCommandId] = useState(() => {
+        const saved = loadSelectedRegionalCommandId();
+        if (saved) return saved;
+        return activeRegionalCommands[0]?.id || '';
+    });
+
+    useEffect(() => {
+        if (!selectedRegionalCommandId && activeRegionalCommands[0]) {
+            setSelectedRegionalCommandId(activeRegionalCommands[0].id);
+            return;
+        }
+        if (selectedRegionalCommandId && !activeRegionalCommands.some(command => command.id === selectedRegionalCommandId)) {
+            const fallbackId = activeRegionalCommands[0]?.id || '';
+            setSelectedRegionalCommandId(fallbackId);
+            if (fallbackId) saveSelectedRegionalCommandId(fallbackId);
+        }
+    }, [activeRegionalCommands, selectedRegionalCommandId]);
+
+    const selectedCommand = activeRegionalCommands.find(command => command.id === selectedRegionalCommandId) ?? null;
+
+    const entryIdsForCommand = useMemo(
+        () => new Set(
+            regionalBriefingEntries
+                .filter(entry => entry.regionalCommandId === selectedRegionalCommandId)
+                .map(entry => entry.id)
+        ),
+        [regionalBriefingEntries, selectedRegionalCommandId]
+    );
+
+    const collectionItemIdsForCommand = useMemo(
+        () => new Set(
+            regionalBriefingCollectionItems
+                .filter(item => item.regionalCommandId === selectedRegionalCommandId)
+                .map(item => item.id)
+        ),
+        [regionalBriefingCollectionItems, selectedRegionalCommandId]
+    );
+
+    const fieldHasValuesForCommand = (fieldId: string) =>
+        regionalBriefingValues.some(value => value.fieldId === fieldId && entryIdsForCommand.has(value.entryId))
+        || regionalBriefingCollectionValues.some(value => value.fieldId === fieldId && collectionItemIdsForCommand.has(value.itemId));
+
+    const handleRegionalCommandChange = (regionalCommandId: string) => {
+        setSelectedRegionalCommandId(regionalCommandId);
+        saveSelectedRegionalCommandId(regionalCommandId);
+    };
 
     const activeSections = regionalBriefingSections
         .filter(section => section.isActive)
@@ -315,8 +376,7 @@ export default function RegionalAdminDynamicForms() {
                 return;
             }
         } else {
-            const hasValues = regionalBriefingValues.some(value => value.fieldId === editingField.id)
-                || regionalBriefingCollectionValues.some(value => value.fieldId === editingField.id);
+            const hasValues = fieldHasValuesForCommand(editingField.id);
             const originalField = regionalBriefingFields.find(field => field.id === editingField.id);
             if (hasValues && originalField && originalField.fieldType !== editingField.fieldType) {
                 setEditError('Este campo já possui dados. Para mudar o tipo, arquive o campo e crie um novo.');
@@ -370,8 +430,7 @@ export default function RegionalAdminDynamicForms() {
     };
 
     const deleteField = async (field: RegionalBriefingField) => {
-        const hasValues = regionalBriefingValues.some(value => value.fieldId === field.id)
-            || regionalBriefingCollectionValues.some(value => value.fieldId === field.id);
+        const hasValues = fieldHasValuesForCommand(field.id);
 
         if (hasValues) {
             await supabase.from('regional_briefing_fields').update({ is_active: false }).eq('id', field.id);
@@ -383,7 +442,7 @@ export default function RegionalAdminDynamicForms() {
 
     return (
         <div className="flex flex-col gap-10 animate-in fade-in duration-500">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6 bg-white p-6 rounded-3xl shadow-premium border border-pm-secondary/10">
+            <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6 bg-white p-6 rounded-3xl shadow-premium border border-pm-secondary/10">
                 <div className="flex items-center gap-5">
                     <div className="w-14 h-14 rounded-2xl bg-pm-primary text-white flex items-center justify-center shadow-lg shadow-pm-primary/20 ring-4 ring-pm-primary/10">
                         <LayoutTemplate className="w-7 h-7" />
@@ -394,6 +453,42 @@ export default function RegionalAdminDynamicForms() {
                             Gerenciamento dos tópicos, seções e campos do briefing regional
                         </p>
                     </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-end gap-3 shrink-0 min-w-0">
+                    <div className="min-w-[220px]">
+                        <label className="text-[10px] font-black uppercase tracking-widest text-pm-secondary flex items-center gap-1.5">
+                            <MapPinned className="w-3.5 h-3.5" />
+                            Comando Regional
+                        </label>
+                        <select
+                            value={selectedRegionalCommandId}
+                            onChange={event => handleRegionalCommandChange(event.target.value)}
+                            disabled={activeRegionalCommands.length === 0}
+                            className="mt-1 w-full border border-pm-secondary/20 rounded-xl px-3 py-3 text-sm font-bold text-pm-dark bg-white outline-none focus:ring-2 focus:ring-pm-primary/20 disabled:opacity-50"
+                        >
+                            {activeRegionalCommands.length === 0 ? (
+                                <option value="">Nenhum comando cadastrado</option>
+                            ) : (
+                                activeRegionalCommands.map(command => (
+                                    <option key={command.id} value={command.id}>{command.name}</option>
+                                ))
+                            )}
+                        </select>
+                    </div>
+                    {selectedCommand && (
+                        <div className="bg-pm-light/60 border border-pm-secondary/10 rounded-xl px-4 py-3 max-w-sm">
+                            <p className="text-[10px] font-black uppercase tracking-widest text-pm-secondary">
+                                Contexto de preenchimento
+                            </p>
+                            <p className="text-xs font-bold text-pm-dark mt-1">
+                                {selectedCommand.name}
+                            </p>
+                            <p className="text-[10px] font-bold text-pm-secondary/70 mt-1 leading-relaxed">
+                                O catálogo (tópicos, seções e campos) é compartilhado entre todos os comandos. As alterações aqui valem para todos; os lançamentos são filtrados por comando.
+                            </p>
+                        </div>
+                    )}
                 </div>
             </div>
 

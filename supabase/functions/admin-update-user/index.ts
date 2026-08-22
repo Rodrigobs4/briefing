@@ -26,7 +26,7 @@ Deno.serve(async (req) => {
         const { data: adminProfile } = await supabaseAdmin.from('profiles').select('role').eq('id', user.id).single();
         if (!adminProfile || adminProfile.role !== 'admin') throw new Error('Acesso Negado: Apenas Admins.');
 
-        const { userId, fullName, role, unitIds } = await req.json();
+        const { userId, fullName, role, unitIds, regionalCommandIds } = await req.json();
 
         if (user.id === userId && role !== 'admin') {
             throw new Error('Ação não permitida: Você não pode remover seu próprio acesso de Admin.');
@@ -52,6 +52,23 @@ Deno.serve(async (req) => {
             const links = safeUnitIds.map((uid: string) => ({ profile_id: userId, unit_id: uid }));
             const { error: linkError } = await supabaseAdmin.from('profile_units').insert(links);
             if (linkError) throw linkError;
+        }
+
+        const { error: deleteRegionalError } = await supabaseAdmin
+            .from('profile_regional_commands')
+            .delete()
+            .eq('profile_id', userId);
+
+        if (deleteRegionalError) throw deleteRegionalError;
+
+        const safeRegionalCommandIds: string[] = Array.isArray(regionalCommandIds) ? regionalCommandIds : [];
+        if (safeRegionalCommandIds.length > 0) {
+            const regionalLinks = safeRegionalCommandIds.map((commandId: string) => ({
+                profile_id: userId,
+                regional_command_id: commandId
+            }));
+            const { error: regionalLinkError } = await supabaseAdmin.from('profile_regional_commands').insert(regionalLinks);
+            if (regionalLinkError) throw regionalLinkError;
         }
 
         return new Response(JSON.stringify({ success: true }), {

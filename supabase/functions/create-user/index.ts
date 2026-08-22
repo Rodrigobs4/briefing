@@ -35,7 +35,7 @@ Deno.serve(async (req) => {
             throw new Error('Acesso Negado: Apenas Admins.');
         }
 
-        const { name, email, password, role, unitIds } = await req.json();
+        const { name, email, password, role, unitIds, regionalCommandIds } = await req.json();
 
         if (!name || !email || !password || !role) {
             throw new Error('Nome, e-mail, senha e perfil são obrigatórios.');
@@ -76,6 +76,20 @@ Deno.serve(async (req) => {
                 .insert(links);
 
             if (linkError) throw linkError;
+        }
+
+        const safeRegionalCommandIds: string[] = Array.isArray(regionalCommandIds) ? regionalCommandIds : [];
+        if (safeRegionalCommandIds.length > 0) {
+            const regionalLinks = safeRegionalCommandIds.map((commandId: string) => ({
+                profile_id: created.user!.id,
+                regional_command_id: commandId
+            }));
+
+            const { error: regionalLinkError } = await supabaseAdmin
+                .from('profile_regional_commands')
+                .insert(regionalLinks);
+
+            if (regionalLinkError) throw regionalLinkError;
         }
 
         return new Response(JSON.stringify({ success: true, userId: created.user.id }), {

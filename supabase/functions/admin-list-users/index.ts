@@ -43,12 +43,21 @@ Deno.serve(async (req) => {
             .select('profile_id, unit_id, units(id, name)');
         if (puError) throw puError;
 
+        // Buscar vínculos de comandos regionais
+        const { data: profileRegionalCommands, error: prcError } = await supabaseAdmin
+            .from('profile_regional_commands')
+            .select('profile_id, regional_command_id, regional_commands(id, name)');
+        if (prcError) throw prcError;
+
         // Mesclar identidades
         const mergedUsers = authData.users.map(u => {
             const p = profiles?.find(pr => pr.id === u.id);
             const links = profileUnits?.filter(pu => pu.profile_id === u.id) ?? [];
             const unitIds = links.map(l => l.unit_id);
             const unitNames = links.map(l => (l.units as any)?.name).filter(Boolean);
+            const regionalLinks = profileRegionalCommands?.filter(prc => prc.profile_id === u.id) ?? [];
+            const regionalCommandIds = regionalLinks.map(l => l.regional_command_id);
+            const regionalCommandNames = regionalLinks.map(l => (l.regional_commands as any)?.name).filter(Boolean);
 
             return {
                 id: u.id,
@@ -59,6 +68,9 @@ Deno.serve(async (req) => {
                 unit_ids: unitIds,
                 unit_names: unitNames,
                 unit_name: unitNames.length > 0 ? unitNames.join(', ') : 'Sem Tópico',
+                regional_command_ids: regionalCommandIds,
+                regional_command_names: regionalCommandNames,
+                regional_command_name: regionalCommandNames.length > 0 ? regionalCommandNames.join(', ') : 'Sem Comando Regional',
                 is_active: p?.is_active ?? true
             };
         });

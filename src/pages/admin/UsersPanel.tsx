@@ -7,6 +7,10 @@ import { useRef } from 'react';
 import UserReport from './UserReport';
 import { compareTextPtBr, sortByTextPtBr } from '../../utils/textOrdering';
 import { isGeneralBriefingUnit } from '../../utils/generalBriefingUnits';
+import {
+    fetchProfileRegionalCommandLinks,
+    syncProfileRegionalCommands
+} from '../../utils/profileRegionalCommands';
 
 // Tipo Extendido exclusivo para visualização via API
 interface AdminUser {
@@ -17,6 +21,9 @@ interface AdminUser {
     unit_ids: string[];
     unit_names: string[];
     unit_name: string; // campo legado para busca por texto
+    regional_command_ids: string[];
+    regional_command_names: string[];
+    regional_command_name: string;
     is_active: boolean;
     created_at: string;
 }
@@ -48,7 +55,9 @@ export default function UsersPanel() {
     const [formPassword, setFormPassword] = useState('');
     const [formRole, setFormRole] = useState<Role>('editor');
     const [formUnitIds, setFormUnitIds] = useState<string[]>([]);
+    const [formRegionalCommandIds, setFormRegionalCommandIds] = useState<string[]>([]);
     const [topicSearchTerm, setTopicSearchTerm] = useState('');
+    const [regionalCommandSearchTerm, setRegionalCommandSearchTerm] = useState('');
     const [deleteConfirm, setDeleteConfirm] = useState('');
     const [isProcessing, setIsProcessing] = useState(false);
     
@@ -83,10 +92,42 @@ export default function UsersPanel() {
     const fetchAdminUsers = async () => {
         setIsLoadingUsers(true);
         try {
-            const { data, error } = await supabase.functions.invoke('admin-list-users');
+            const [{ data, error }, regionalLinksResult] = await Promise.all([
+                supabase.functions.invoke('admin-list-users'),
+                fetchProfileRegionalCommandLinks().catch(() => [] as Awaited<ReturnType<typeof fetchProfileRegionalCommandLinks>>)
+            ]);
             if (error) throw error;
             if (data?.error) throw new Error(data.error);
-            setUsersList(sortByTextPtBr(data.users || [], listedUser => listedUser.full_name || listedUser.email));
+
+            const regionalByProfile = new Map<string, string[]>();
+            for (const link of regionalLinksResult) {
+                const existing = regionalByProfile.get(link.profile_id) ?? [];
+                existing.push(link.regional_command_id);
+                regionalByProfile.set(link.profile_id, existing);
+            }
+
+            const commandNameById = new Map(regionalCommands.map(command => [command.id, command.name]));
+            const mergedUsers: AdminUser[] = (data.users || []).map((listedUser: AdminUser) => {
+                const regionalIds = listedUser.regional_command_ids?.length
+                    ? listedUser.regional_command_ids
+                    : (regionalByProfile.get(listedUser.id) ?? []);
+                const regionalNames = regionalIds
+                    .map(commandId => commandNameById.get(commandId))
+                    .filter((name): name is string => Boolean(name));
+
+                return {
+                    ...listedUser,
+                    regional_command_ids: regionalIds,
+                    regional_command_names: regionalNames.length > 0
+                        ? regionalNames
+                        : (listedUser.regional_command_names ?? []),
+                    regional_command_name: regionalNames.length > 0
+                        ? regionalNames.join(', ')
+                        : (listedUser.regional_command_name || 'Sem Comando Regional')
+                };
+            });
+
+            setUsersList(sortByTextPtBr(mergedUsers, listedUser => listedUser.full_name || listedUser.email));
         } catch (err: any) {
             showToast('error', `Erro ao carregar lista de usuários: ${err.message}`);
         } finally {
@@ -104,11 +145,20 @@ export default function UsersPanel() {
                     email: formEmail,
                     password: formPassword,
                     role: formRole,
-                    unitIds: formRole === 'editor' ? formUnitIds : []
+                    unitIds: formRole === 'editor' ? formUnitIds : [],
+                    regionalCommandIds: formRole === 'editor' ? formRegionalCommandIds : []
                 }
             });
             if (error) throw new Error(error.message);
             if (data?.error) throw new Error(data.error);
+
+            const newUserId = data?.userId as string | undefined;
+            if (!newUserId) throw new Error('Usuário criado, mas o ID não foi retornado.');
+
+            await syncProfileRegionalCommands(
+                newUserId,
+                formRole === 'editor' ? formRegionalCommandIds : []
+            );
 
             showToast('success', 'Usuário criado com sucesso!');
             setIsCreateOpen(false);
@@ -130,11 +180,17 @@ export default function UsersPanel() {
                     userId: selectedUser.id,
                     fullName: formName,
                     role: formRole,
-                    unitIds: formRole === 'editor' ? formUnitIds : []
+                    unitIds: formRole === 'editor' ? formUnitIds : [],
+                    regionalCommandIds: formRole === 'editor' ? formRegionalCommandIds : []
                 }
             });
             if (error) throw new Error(error.message);
             if (data?.error) throw new Error(data.error);
+
+            await syncProfileRegionalCommands(
+                selectedUser.id,
+                formRole === 'editor' ? formRegionalCommandIds : []
+            );
 
             showToast('success', 'Usuário atualizado com sucesso.');
             setIsEditOpen(false);
@@ -209,6 +265,12 @@ export default function UsersPanel() {
         );
     };
 
+    const toggleRegionalCommandId = (id: string) => {
+        setFormRegionalCommandIds(prev =>
+            prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]
+        );
+    };
+
     const resetFilters = () => {
         setSearchTerm('');
         setRoleFilter('all');
@@ -221,7 +283,9 @@ export default function UsersPanel() {
         setFormName(u.full_name);
         setFormRole(u.role);
         setFormUnitIds((u.unit_ids || []).filter(unitId => generalTopicIds.has(unitId)));
+        setFormRegionalCommandIds(u.regional_command_ids || []);
         setTopicSearchTerm('');
+        setRegionalCommandSearchTerm('');
         setIsEditOpen(true);
     };
 
@@ -241,25 +305,37 @@ export default function UsersPanel() {
         units.filter(unit => isGeneralBriefingUnit(unit, regionalCommands)),
         unit => unit.name
     );
+    const sortedRegionalCommands = sortByTextPtBr(
+        regionalCommands.filter(command => command.isActive),
+        command => command.name
+    );
+    const getVisibleUserRegionalCommands = (listedUser: AdminUser) =>
+        sortedRegionalCommands.filter(command => listedUser.regional_command_ids?.includes(command.id));
     const generalTopicIds = new Set(sortedTopics.map(unit => unit.id));
     const getVisibleUserTopics = (listedUser: AdminUser) => sortedTopics.filter(topic => listedUser.unit_ids?.includes(topic.id));
     const reportUsers = usersList.map(listedUser => {
         const topicNames = getVisibleUserTopics(listedUser).map(topic => topic.name);
+        const regionalCommandNames = getVisibleUserRegionalCommands(listedUser).map(command => command.name);
         return {
             ...listedUser,
             unit_ids: listedUser.unit_ids.filter(unitId => generalTopicIds.has(unitId)),
             unit_names: topicNames,
-            unit_name: topicNames.join(', ')
+            unit_name: topicNames.join(', '),
+            regional_command_ids: listedUser.regional_command_ids || [],
+            regional_command_names: regionalCommandNames,
+            regional_command_name: regionalCommandNames.join(', ')
         };
     });
     const normalizedSearchTerm = searchTerm.trim().toLocaleLowerCase('pt-BR');
     const filteredUsers = reportUsers
         .filter(u => {
             const visibleTopics = getVisibleUserTopics(u);
+            const visibleRegionalCommands = getVisibleUserRegionalCommands(u);
             return !normalizedSearchTerm ||
                 u.full_name?.toLocaleLowerCase('pt-BR').includes(normalizedSearchTerm) ||
                 u.email?.toLocaleLowerCase('pt-BR').includes(normalizedSearchTerm) ||
-                visibleTopics.some(topic => topic.name.toLocaleLowerCase('pt-BR').includes(normalizedSearchTerm));
+                visibleTopics.some(topic => topic.name.toLocaleLowerCase('pt-BR').includes(normalizedSearchTerm)) ||
+                visibleRegionalCommands.some(command => command.name.toLocaleLowerCase('pt-BR').includes(normalizedSearchTerm));
         })
         .filter(u => roleFilter === 'all' || u.role === roleFilter)
         .filter(u =>
@@ -277,6 +353,10 @@ export default function UsersPanel() {
     const normalizedTopicSearch = topicSearchTerm.trim().toLocaleLowerCase('pt-BR');
     const visibleFormTopics = sortedTopics.filter(unit =>
         !normalizedTopicSearch || unit.name.toLocaleLowerCase('pt-BR').includes(normalizedTopicSearch)
+    );
+    const normalizedRegionalCommandSearch = regionalCommandSearchTerm.trim().toLocaleLowerCase('pt-BR');
+    const visibleFormRegionalCommands = sortedRegionalCommands.filter(command =>
+        !normalizedRegionalCommandSearch || command.name.toLocaleLowerCase('pt-BR').includes(normalizedRegionalCommandSearch)
     );
 
     // Componente interno: seletor de tópicos com checkboxes
@@ -347,6 +427,73 @@ export default function UsersPanel() {
         </div>
     );
 
+    const RegionalCommandsSelector = () => (
+        <div>
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <label className="block text-xs font-bold text-pm-primary">Comandos Regionais</label>
+                <div className="flex gap-1.5">
+                    <button
+                        type="button"
+                        onClick={() => setFormRegionalCommandIds(sortedRegionalCommands.map(command => command.id))}
+                        disabled={sortedRegionalCommands.length === 0 || formRegionalCommandIds.length === sortedRegionalCommands.length}
+                        className="rounded-md border border-pm-primary/20 bg-pm-primary/5 px-2 py-1 text-[10px] font-black uppercase text-pm-primary hover:bg-pm-primary/10 disabled:opacity-40"
+                    >
+                        Selecionar todos
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setFormRegionalCommandIds([])}
+                        disabled={formRegionalCommandIds.length === 0}
+                        className="rounded-md border border-pm-secondary/20 px-2 py-1 text-[10px] font-black uppercase text-pm-secondary hover:bg-pm-light disabled:opacity-40"
+                    >
+                        Limpar
+                    </button>
+                </div>
+            </div>
+            <div className="relative mb-2">
+                <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-pm-secondary" />
+                <input
+                    type="text"
+                    value={regionalCommandSearchTerm}
+                    onChange={event => setRegionalCommandSearchTerm(event.target.value)}
+                    placeholder="Buscar comando regional..."
+                    className="w-full rounded-lg border border-pm-secondary/25 py-2 pl-9 pr-3 text-xs outline-none focus:ring-2 focus:ring-pm-primary/20"
+                />
+            </div>
+            <div className="border border-pm-primary/40 rounded-lg max-h-44 overflow-y-auto divide-y divide-pm-secondary/10">
+                {sortedRegionalCommands.length === 0 && (
+                    <p className="text-xs text-pm-secondary p-3">Nenhum comando regional cadastrado.</p>
+                )}
+                {sortedRegionalCommands.length > 0 && visibleFormRegionalCommands.length === 0 && (
+                    <p className="text-xs text-pm-secondary p-3">Nenhum comando encontrado.</p>
+                )}
+                {visibleFormRegionalCommands.map(command => {
+                    const isChecked = formRegionalCommandIds.includes(command.id);
+                    return (
+                        <button
+                            key={command.id}
+                            type="button"
+                            onClick={() => toggleRegionalCommandId(command.id)}
+                            className={`w-full flex items-center gap-3 px-3 py-2 text-left text-sm transition-colors
+                                ${isChecked ? 'bg-pm-primary/8 text-pm-primary' : 'hover:bg-pm-light/60 text-pm-dark'}`}
+                        >
+                            <span className={`w-4 h-4 rounded flex-shrink-0 border flex items-center justify-center transition-colors
+                                ${isChecked ? 'bg-pm-primary border-pm-primary' : 'border-pm-secondary/40 bg-white'}`}>
+                                {isChecked && <Check className="w-3 h-3 text-white" strokeWidth={3} />}
+                            </span>
+                            <span className="truncate font-medium">{command.name}</span>
+                        </button>
+                    );
+                })}
+            </div>
+            {formRegionalCommandIds.length > 0 && (
+                <p className="text-xs text-pm-primary mt-1.5 font-medium">
+                    {formRegionalCommandIds.length} de {sortedRegionalCommands.length} comando{sortedRegionalCommands.length !== 1 ? 's' : ''} selecionado{formRegionalCommandIds.length > 1 ? 's' : ''}
+                </p>
+            )}
+        </div>
+    );
+
     return (
         <div className="space-y-6 relative">
             {toastMsg && (
@@ -373,8 +520,9 @@ export default function UsersPanel() {
                     </button>
                     <button
                         onClick={() => {
-                            setFormName(''); setFormEmail(''); setFormPassword(''); setFormRole('editor'); setFormUnitIds([]);
+                            setFormName(''); setFormEmail(''); setFormPassword(''); setFormRole('editor'); setFormUnitIds([]); setFormRegionalCommandIds([]);
                             setTopicSearchTerm('');
+                            setRegionalCommandSearchTerm('');
                             setIsCreateOpen(true);
                         }}
                         className="bg-pm-primary text-pm-light px-4 py-2 rounded-lg text-sm font-black hover:bg-pm-primary/90 transition-all flex items-center gap-2 shadow-md whitespace-nowrap active:scale-95"
@@ -464,6 +612,7 @@ export default function UsersPanel() {
                             <tr>
                                 <th className="px-6 py-4 font-medium">Conta de Acesso</th>
                                 <th className="px-6 py-4 font-medium">Tópico(s) Atrelado(s)</th>
+                                <th className="px-6 py-4 font-medium">Comando(s) Regional(is)</th>
                                 <th className="px-6 py-4 font-medium">Acesso</th>
                                 <th className="px-6 py-4 font-medium">Status</th>
                                 <th className="px-6 py-4 font-medium text-right">Ações</th>
@@ -494,6 +643,19 @@ export default function UsersPanel() {
                                             </div>
                                         ) : (
                                             <span className="text-pm-secondary/60 text-xs italic">Sem Tópico</span>
+                                        )}
+                                    </td>
+                                    <td className="px-6 py-4">
+                                        {getVisibleUserRegionalCommands(u).length > 0 ? (
+                                            <div className="flex flex-wrap gap-1">
+                                                {getVisibleUserRegionalCommands(u).map(command => (
+                                                    <span key={command.id} className="px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full text-[10px] font-semibold">
+                                                        {command.name}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        ) : (
+                                            <span className="text-pm-secondary/60 text-xs italic">Sem Comando</span>
                                         )}
                                     </td>
                                     <td className="px-6 py-4">
@@ -530,7 +692,7 @@ export default function UsersPanel() {
                             ))}
                             {!isLoadingUsers && filteredUsers.length === 0 && (
                                 <tr>
-                                    <td colSpan={5} className="px-6 py-12 text-center text-pm-secondary">
+                                    <td colSpan={6} className="px-6 py-12 text-center text-pm-secondary">
                                         Nenhum usuário encontrado no sistema.
                                     </td>
                                 </tr>
@@ -554,11 +716,16 @@ export default function UsersPanel() {
                                 <div><label className="block text-xs font-medium mb-1">E-mail</label><input required type="email" value={formEmail} onChange={e => setFormEmail(e.target.value)} className="w-full border p-2 text-sm rounded-md" /></div>
                                 <div><label className="block text-xs font-medium mb-1">Senha (Mín 6 desc)</label><input required type="text" minLength={6} value={formPassword} onChange={e => setFormPassword(e.target.value)} className="w-full border p-2 text-sm rounded-md" /></div>
                                 <div><label className="block text-xs font-medium mb-1">Perfil de Acesso</label>
-                                    <select value={formRole} onChange={(e) => { setFormRole(e.target.value as Role); setFormUnitIds([]); }} className="w-full border p-2 text-sm rounded-md">
+                                    <select value={formRole} onChange={(e) => { setFormRole(e.target.value as Role); setFormUnitIds([]); setFormRegionalCommandIds([]); }} className="w-full border p-2 text-sm rounded-md">
                                         <option value="admin">Administrador</option><option value="commander">Comandante</option><option value="editor">Editor</option>
                                     </select>
                                 </div>
-                                {formRole === 'editor' && <TopicsSelector />}
+                                {formRole === 'editor' && (
+                                    <>
+                                        <TopicsSelector />
+                                        <RegionalCommandsSelector />
+                                    </>
+                                )}
                                 <div className="pt-4 flex justify-end gap-2">
                                     <button type="button" onClick={() => setIsCreateOpen(false)} className="px-3 py-1.5 text-xs font-medium border rounded hover:bg-gray-50">Cancelar</button>
                                     <button type="submit" disabled={isProcessing} className="px-3 py-1.5 text-xs font-medium bg-pm-primary text-white rounded flex gap-2">
@@ -584,11 +751,16 @@ export default function UsersPanel() {
                             <form onSubmit={handleUpdateUser} className="space-y-4">
                                 <div><label className="block text-xs font-medium mb-1">Nome Completo</label><input required value={formName} onChange={e => setFormName(e.target.value)} className="w-full border p-2 text-sm rounded-md" /></div>
                                 <div><label className="block text-xs font-medium mb-1">Perfil de Acesso</label>
-                                    <select value={formRole} onChange={(e) => { setFormRole(e.target.value as Role); setFormUnitIds([]); }} className="w-full border p-2 text-sm rounded-md">
+                                    <select value={formRole} onChange={(e) => { setFormRole(e.target.value as Role); setFormUnitIds([]); setFormRegionalCommandIds([]); }} className="w-full border p-2 text-sm rounded-md">
                                         <option value="admin">Administrador</option><option value="commander">Comandante</option><option value="editor">Editor</option>
                                     </select>
                                 </div>
-                                {formRole === 'editor' && <TopicsSelector />}
+                                {formRole === 'editor' && (
+                                    <>
+                                        <TopicsSelector />
+                                        <RegionalCommandsSelector />
+                                    </>
+                                )}
                                 <div className="pt-4 flex justify-end gap-2">
                                     <button type="button" onClick={() => setIsEditOpen(false)} className="px-3 py-1.5 text-xs font-medium border rounded hover:bg-gray-50">Cancelar</button>
                                     <button type="submit" disabled={isProcessing} className="px-3 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded flex gap-2">
