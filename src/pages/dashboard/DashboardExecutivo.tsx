@@ -70,6 +70,22 @@ const ChartFallback = () => <div className="h-full w-full animate-pulse rounded-
 
 type DashboardTab = "overview" | "indicators" | "records" | "detail";
 type UpdateAlertStatus = "overdue" | "pending" | "complete";
+type UpdateAlertFilter = "all" | UpdateAlertStatus;
+
+const UPDATE_ALERT_STATUS_LABEL: Record<UpdateAlertStatus, string> = {
+  overdue: "Atrasado",
+  pending: "Aguardando",
+  complete: "Atualizado",
+};
+
+const formatAlertLastUpdate = (lastUpdateAt: string | null) => {
+  if (!lastUpdateAt) return "Sem atualização";
+  const date = new Date(lastUpdateAt);
+  return `${date.toLocaleDateString("pt-BR")} ${date.toLocaleTimeString("pt-BR", {
+    hour: "2-digit",
+    minute: "2-digit",
+  })}`;
+};
 
 const formatDashboardValue = (field: { type: string; value: unknown }) => {
   const numericValue = Number(field.value);
@@ -187,6 +203,7 @@ export default function DashboardExecutivo() {
   const [detailSearch, setDetailSearch] = useState("");
   const [activeTab, setActiveTab] = useState<DashboardTab>("overview");
   const [focusedUnitId, setFocusedUnitId] = useState<string | null>(null);
+  const [updateAlertFilter, setUpdateAlertFilter] = useState<UpdateAlertFilter>("all");
 
   useEffect(() => {
     if (!isInitialized && units.length > 0) {
@@ -302,11 +319,17 @@ export default function DashboardExecutivo() {
       }>;
   }, [collectionFieldValues, collectionItems, entries, fieldValues, unitUpdateAlertRules, units, users]);
 
-  const actionableAlerts = updateAlerts.filter((alert) => alert.status !== "complete");
   const overdueAlertCount = updateAlerts.filter((alert) => alert.status === "overdue").length;
   const pendingAlertCount = updateAlerts.filter((alert) => alert.status === "pending").length;
   const completeAlertCount = updateAlerts.filter((alert) => alert.status === "complete").length;
-  const visibleActionableAlerts = actionableAlerts.slice(0, 5);
+  const filteredUpdateAlerts = useMemo(() => {
+    if (updateAlertFilter === "all") return updateAlerts;
+    return updateAlerts.filter((alert) => alert.status === updateAlertFilter);
+  }, [updateAlertFilter, updateAlerts]);
+
+  const handleUpdateAlertFilter = (nextFilter: UpdateAlertFilter) => {
+    setUpdateAlertFilter((current) => (current === nextFilter && nextFilter !== "all" ? "all" : nextFilter));
+  };
 
   // LÓGICA 1 (NOVA): Hierarquia de Snapshots via DataGroupEntries
   const hierarchicalView = useMemo(() => {
@@ -956,65 +979,146 @@ export default function DashboardExecutivo() {
       </div>
 
       {user?.role !== "editor" && updateAlerts.length > 0 && (
-        <section className="rounded-2xl border border-pm-secondary/15 bg-white p-4 shadow-sm">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-center">
-            <div className="min-w-[220px]">
-              <p className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-pm-secondary">
-                <ShieldAlert className="h-4 w-4 text-amber-600" /> Alertas
-              </p>
-              <h3 className="mt-1 text-base font-black text-pm-dark">Controle de atualização</h3>
-            </div>
-            <div className="grid grid-cols-3 gap-2 sm:min-w-[360px]">
-              <div className={`rounded-xl px-3 py-2 text-center ${overdueAlertCount > 0 ? "bg-red-50 text-red-700" : "bg-pm-light text-pm-secondary"}`}>
-                <strong className="block text-lg font-black">{overdueAlertCount}</strong>
-                <span className="text-[9px] font-black uppercase tracking-wider">atrasado</span>
-              </div>
-              <div className={`rounded-xl px-3 py-2 text-center ${pendingAlertCount > 0 ? "bg-blue-50 text-blue-700" : "bg-pm-light text-pm-secondary"}`}>
-                <strong className="block text-lg font-black">{pendingAlertCount}</strong>
-                <span className="text-[9px] font-black uppercase tracking-wider">aguardando</span>
-              </div>
-              <div className={`rounded-xl px-3 py-2 text-center ${completeAlertCount > 0 ? "bg-emerald-50 text-emerald-700" : "bg-pm-light text-pm-secondary"}`}>
-                <strong className="block text-lg font-black">{completeAlertCount}</strong>
-                <span className="text-[9px] font-black uppercase tracking-wider">atualizado</span>
-              </div>
-            </div>
-            <div className="min-w-0 flex-1">
-              {actionableAlerts.length === 0 ? (
-                <p className="rounded-xl bg-emerald-50 px-4 py-3 text-xs font-bold text-emerald-800">
-                  Todos os tópicos monitorados foram atualizados dentro do ciclo vigente.
+        <section className="rounded-2xl border border-pm-secondary/15 bg-white p-4 shadow-sm sm:p-5">
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
+              <div>
+                <p className="flex items-center gap-2 text-[10px] font-black uppercase tracking-[0.18em] text-pm-secondary">
+                  <ShieldAlert className="h-4 w-4 text-amber-600" /> Alertas
                 </p>
-              ) : (
-                <div className="overflow-hidden rounded-xl border border-pm-secondary/10">
-                  {visibleActionableAlerts.map((alert) => (
-                    <div key={alert.rule.id} className="grid grid-cols-1 gap-2 border-b border-pm-secondary/10 px-3 py-2 last:border-b-0 md:grid-cols-[1fr_auto_auto] md:items-center">
+                <h3 className="mt-1 text-base font-black text-pm-dark">Controle de atualização</h3>
+                <p className="mt-1 text-xs font-bold text-pm-secondary">
+                  {filteredUpdateAlerts.length} de {updateAlerts.length} tópico
+                  {updateAlerts.length === 1 ? "" : "s"} · exibindo última atualização
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {(
+                  [
+                    { id: "all" as const, label: "Todos", count: updateAlerts.length },
+                    { id: "overdue" as const, label: "Atrasado", count: overdueAlertCount },
+                    { id: "pending" as const, label: "Aguardando", count: pendingAlertCount },
+                    { id: "complete" as const, label: "Atualizado", count: completeAlertCount },
+                  ] as const
+                ).map((tab) => {
+                  const isActive = updateAlertFilter === tab.id;
+                  return (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => handleUpdateAlertFilter(tab.id)}
+                      className={`rounded-xl px-3 py-2 text-[10px] font-black uppercase tracking-wider transition-colors ${
+                        isActive
+                          ? "bg-pm-dark text-white shadow-sm"
+                          : "bg-pm-light text-pm-secondary hover:bg-pm-light/80 hover:text-pm-dark"
+                      }`}
+                    >
+                      {tab.label}
+                      <span className={`ml-1.5 ${isActive ? "text-white/70" : "text-pm-secondary/70"}`}>
+                        {tab.count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+              <button
+                type="button"
+                onClick={() => handleUpdateAlertFilter("overdue")}
+                className={`rounded-xl px-3 py-3 text-left transition-all ${
+                  updateAlertFilter === "overdue"
+                    ? "bg-red-100 ring-2 ring-red-300 text-red-800"
+                    : overdueAlertCount > 0
+                      ? "bg-red-50 text-red-700 hover:bg-red-100"
+                      : "bg-pm-light text-pm-secondary hover:bg-pm-light/80"
+                }`}
+              >
+                <strong className="block text-2xl font-black leading-none">{overdueAlertCount}</strong>
+                <span className="mt-1 block text-[10px] font-black uppercase tracking-wider">Atrasado</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleUpdateAlertFilter("pending")}
+                className={`rounded-xl px-3 py-3 text-left transition-all ${
+                  updateAlertFilter === "pending"
+                    ? "bg-blue-100 ring-2 ring-blue-300 text-blue-800"
+                    : pendingAlertCount > 0
+                      ? "bg-blue-50 text-blue-700 hover:bg-blue-100"
+                      : "bg-pm-light text-pm-secondary hover:bg-pm-light/80"
+                }`}
+              >
+                <strong className="block text-2xl font-black leading-none">{pendingAlertCount}</strong>
+                <span className="mt-1 block text-[10px] font-black uppercase tracking-wider">Aguardando</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => handleUpdateAlertFilter("complete")}
+                className={`rounded-xl px-3 py-3 text-left transition-all ${
+                  updateAlertFilter === "complete"
+                    ? "bg-emerald-100 ring-2 ring-emerald-300 text-emerald-800"
+                    : completeAlertCount > 0
+                      ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                      : "bg-pm-light text-pm-secondary hover:bg-pm-light/80"
+                }`}
+              >
+                <strong className="block text-2xl font-black leading-none">{completeAlertCount}</strong>
+                <span className="mt-1 block text-[10px] font-black uppercase tracking-wider">Atualizado</span>
+              </button>
+            </div>
+
+            {filteredUpdateAlerts.length === 0 ? (
+              <p className="rounded-xl bg-pm-light/60 px-4 py-3 text-xs font-bold text-pm-secondary">
+                Nenhum tópico neste filtro.
+              </p>
+            ) : (
+              <div className="overflow-hidden rounded-xl border border-pm-secondary/10">
+                <div className="hidden grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_140px_110px] gap-3 border-b border-pm-secondary/10 bg-pm-light/40 px-3 py-2 text-[9px] font-black uppercase tracking-wider text-pm-secondary md:grid">
+                  <span>Tópico / responsável</span>
+                  <span>Setor</span>
+                  <span>Última atualização</span>
+                  <span>Status</span>
+                </div>
+                <div className="max-h-[28rem] overflow-y-auto">
+                  {filteredUpdateAlerts.map((alert) => (
+                    <div
+                      key={alert.rule.id}
+                      className="grid grid-cols-1 gap-2 border-b border-pm-secondary/10 px-3 py-3 last:border-b-0 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_140px_110px] md:items-center md:gap-3"
+                    >
                       <div className="min-w-0">
                         <p className="truncate text-xs font-black uppercase text-pm-dark">{alert.unit.name}</p>
                         <p className="truncate text-[10px] font-bold uppercase tracking-wide text-pm-secondary">
-                          {alert.unit.responsibleSector || "Setor não definido"} · {alert.responsibleUpdater}
+                          {alert.responsibleUpdater}
                         </p>
                       </div>
-                      <span className="text-[10px] font-bold uppercase tracking-wide text-pm-secondary">
-                        {alert.lastUpdateAt
-                          ? `${new Date(alert.lastUpdateAt).toLocaleDateString("pt-BR")} ${new Date(alert.lastUpdateAt).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" })}`
-                          : "Sem atualização"}
-                      </span>
-                      <span className={`w-fit rounded-full px-2.5 py-1 text-[9px] font-black uppercase ${
-                        alert.status === "overdue"
-                          ? "bg-red-100 text-red-700"
-                          : "bg-blue-100 text-blue-700"
-                      }`}>
-                        {alert.status === "overdue" ? "Atrasado" : "Aguardando"}
+                      <p className="truncate text-[10px] font-bold uppercase tracking-wide text-pm-secondary">
+                        {alert.unit.responsibleSector || "Setor não definido"}
+                      </p>
+                      <div className="min-w-0">
+                        <p className="text-[9px] font-black uppercase tracking-wider text-pm-secondary/70 md:hidden">
+                          Última atualização
+                        </p>
+                        <p className="text-[10px] font-bold uppercase tracking-wide text-pm-secondary">
+                          {formatAlertLastUpdate(alert.lastUpdateAt)}
+                        </p>
+                      </div>
+                      <span
+                        className={`w-fit rounded-full px-2.5 py-1 text-[9px] font-black uppercase ${
+                          alert.status === "overdue"
+                            ? "bg-red-100 text-red-700"
+                            : alert.status === "pending"
+                              ? "bg-blue-100 text-blue-700"
+                              : "bg-emerald-100 text-emerald-700"
+                        }`}
+                      >
+                        {UPDATE_ALERT_STATUS_LABEL[alert.status]}
                       </span>
                     </div>
                   ))}
-                  {actionableAlerts.length > visibleActionableAlerts.length && (
-                    <div className="bg-pm-light/40 px-3 py-2 text-[10px] font-black uppercase tracking-wider text-pm-secondary">
-                      +{actionableAlerts.length - visibleActionableAlerts.length} pendências adicionais
-                    </div>
-                  )}
                 </div>
-              )}
-            </div>
+              </div>
+            )}
           </div>
         </section>
       )}
