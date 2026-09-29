@@ -90,17 +90,14 @@ const evaluatePassedDeadline = (
   activatedAt: Date,
 ): Pick<UnitUpdateAlertEvaluation, "status" | "cycleStart" | "latestUpdate"> => {
   const cycleStart = getCycleStart(dueAt, activatedAt);
-  const latestUpdate = getLatestUpdateInWindow(updateTimestamps, cycleStart, dueAt);
+  // Atualização feita após o prazo também encerra o ciclo; só volta a atrasar no próximo prazo.
+  const latestUpdate = getLatestUpdateAfter(updateTimestamps, cycleStart);
 
   if (latestUpdate) {
     return { status: "complete", cycleStart, latestUpdate };
   }
 
-  return {
-    status: "overdue",
-    cycleStart,
-    latestUpdate: getLatestUpdateAfter(updateTimestamps, cycleStart),
-  };
+  return { status: "overdue", cycleStart, latestUpdate: null };
 };
 
 export const evaluateUnitUpdateAlert = (
