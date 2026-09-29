@@ -797,6 +797,24 @@ export default function DashboardExecutivo() {
     [visibleHierarchy],
   );
 
+  const indicatorUnits = useMemo(
+    () =>
+      visibleHierarchy
+        .map((unit) => ({
+          ...unit,
+          groups: unit.groups
+            .filter((group) => group.mode === "snapshot")
+            .map((group) => ({
+              ...group,
+              numberFields: group.numberFields || [],
+              textFields: group.textFields || [],
+            }))
+            .filter((group) => group.numberFields.length > 0 || group.textFields.length > 0),
+        }))
+        .filter((unit) => unit.groups.length > 0),
+    [visibleHierarchy],
+  );
+
   const recordRows = useMemo(
     () =>
       visibleHierarchy
@@ -1360,84 +1378,87 @@ export default function DashboardExecutivo() {
             </div>
           ) : (
             <>
-            {indicatorRows.length > 0 && (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {indicatorRows.map((field: any) => (
+            <div className="space-y-5">
+              {indicatorUnits.map((unit) => (
                 <article
-                  key={`${field.unitId}-${field.groupId}-${field.fieldId}`}
-                  className="rounded-2xl border border-pm-secondary/15 bg-white p-5 shadow-sm transition-all hover:border-pm-primary/30 hover:shadow-premium"
+                  key={unit.unitId}
+                  className="overflow-hidden rounded-3xl border border-pm-secondary/15 bg-white shadow-sm"
                 >
-                  <div className="flex items-start justify-between gap-3">
+                  <header className="flex flex-col gap-3 border-b border-pm-secondary/10 bg-pm-light/40 px-5 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
                     <div className="min-w-0">
-                      <p className="truncate text-[10px] font-black uppercase tracking-widest text-pm-secondary">
-                        {field.unitName}
-                      </p>
-                      <p className="mt-1 truncate text-xs font-bold text-pm-primary">
-                        {field.groupTitle}
+                      <h4 className="text-base font-black uppercase tracking-wide text-pm-dark">
+                        {unit.unitName}
+                      </h4>
+                      <p className="mt-0.5 text-[11px] font-bold text-pm-secondary">
+                        {unit.groups.length} seç{unit.groups.length === 1 ? "ão" : "ões"}
                       </p>
                     </div>
-                    <Activity className="h-4 w-4 shrink-0 text-pm-primary/60" />
-                  </div>
-                  <p className="mt-5 text-xs font-black uppercase tracking-wide text-pm-secondary/75">
-                    {field.label}
-                  </p>
-                  <p className={`mt-2 text-3xl font-black tracking-tight ${getMetricColor(field.label, field.value)}`}>
-                    {formatDashboardValue(field)}
-                  </p>
-                  <div className="mt-4 space-y-1.5 border-t border-pm-secondary/10 pt-3 text-[10px] font-bold uppercase tracking-wide text-pm-secondary/70">
-                    {field.responsibleSector && (
-                      <p className="flex items-center gap-1.5">
-                        <Building2 className="h-3 w-3" />
-                        {field.responsibleSector}
-                      </p>
-                    )}
-                    {field.responsibleUpdater && (
-                      <p className="flex items-center gap-1.5">
-                        <UserRound className="h-3 w-3" />
-                        Responsável: {field.responsibleUpdater}
-                      </p>
-                    )}
-                    {field.lastUpdated && (
-                      <p className="flex items-center gap-1.5">
-                        <Clock className="h-3 w-3" />
-                        Última: {new Date(field.lastUpdated).toLocaleDateString("pt-BR")} por {field.updatedBy}
-                      </p>
-                    )}
+                    <div className="flex flex-wrap gap-x-4 gap-y-1.5 text-[10px] font-bold uppercase tracking-wide text-pm-secondary/80">
+                      {unit.responsibleSector && (
+                        <span className="flex items-center gap-1.5">
+                          <Building2 className="h-3 w-3" />
+                          {unit.responsibleSector}
+                        </span>
+                      )}
+                      {unit.responsibleUpdater && (
+                        <span className="flex items-center gap-1.5">
+                          <UserRound className="h-3 w-3" />
+                          {unit.responsibleUpdater}
+                        </span>
+                      )}
+                      {unit.lastUpdated && (
+                        <span className="flex items-center gap-1.5">
+                          <Clock className="h-3 w-3" />
+                          {new Date(unit.lastUpdated).toLocaleDateString("pt-BR")}
+                          {unit.updatedBy ? ` por ${unit.updatedBy}` : ""}
+                        </span>
+                      )}
+                    </div>
+                  </header>
+
+                  <div className="divide-y divide-pm-secondary/10">
+                    {unit.groups.map((group) => (
+                      <section key={group.groupId} className="px-5 py-5 sm:px-6">
+                        <h5 className="mb-3 text-xs font-black uppercase tracking-wider text-pm-primary">
+                          {group.groupTitle}
+                        </h5>
+                        {group.numberFields.length > 0 && (
+                          <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">
+                            {group.numberFields.map((field: any) => (
+                              <div
+                                key={field.fieldId}
+                                className="rounded-2xl border border-pm-secondary/10 bg-pm-light/30 px-4 py-3"
+                              >
+                                <p className="text-[10px] font-black uppercase leading-snug tracking-wide text-pm-secondary/80">
+                                  {field.label}
+                                </p>
+                                <p className={`mt-1 text-2xl font-black tracking-tight ${getMetricColor(field.label, field.value)}`}>
+                                  {formatDashboardValue(field)}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {group.textFields.length > 0 && (
+                          <div className={`space-y-3 ${group.numberFields.length > 0 ? "mt-4" : ""}`}>
+                            {group.textFields.map((field: any) => (
+                              <div key={field.fieldId} className="rounded-2xl border border-dashed border-pm-secondary/15 px-4 py-3">
+                                <p className="text-[10px] font-black uppercase tracking-wide text-pm-secondary/80">
+                                  {field.label}
+                                </p>
+                                <p className="mt-1.5 whitespace-pre-wrap text-sm font-medium leading-relaxed text-pm-dark">
+                                  {field.value}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </section>
+                    ))}
                   </div>
                 </article>
               ))}
             </div>
-            )}
-            {textualRows.length > 0 && (
-              <div className="space-y-3">
-                <h4 className="text-sm font-black uppercase tracking-wider text-pm-secondary">
-                  Informações qualitativas
-                </h4>
-                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                  {textualRows.map((field: any) => (
-                    <article
-                      key={`${field.unitId}-${field.groupId}-${field.fieldId}`}
-                      className="rounded-2xl border border-pm-secondary/15 bg-white p-5 shadow-sm"
-                    >
-                      <div className="flex flex-wrap items-center gap-2 text-[10px] font-black uppercase tracking-wide">
-                        <span className="rounded-lg bg-pm-light px-2 py-1 text-pm-secondary">{field.unitName}</span>
-                        <span className="text-pm-primary">{field.groupTitle}</span>
-                      </div>
-                      <p className="mt-4 text-xs font-black uppercase text-pm-secondary/75">{field.label}</p>
-                      <p className="mt-2 whitespace-pre-wrap text-sm font-medium leading-relaxed text-pm-dark">
-                        {field.value}
-                      </p>
-                      {(field.responsibleUpdater || field.responsibleSector) && (
-                        <p className="mt-4 border-t border-pm-secondary/10 pt-3 text-[10px] font-bold uppercase text-pm-secondary/75">
-                          {field.responsibleSector || "Setor não definido"}
-                          {field.responsibleUpdater ? ` · Responsável: ${field.responsibleUpdater}` : ""}
-                        </p>
-                      )}
-                    </article>
-                  ))}
-                </div>
-              </div>
-            )}
             </>
           )}
         </section>
