@@ -246,6 +246,7 @@ interface DatabaseContextType {
     logout: () => Promise<void>;
     updateUserPassword: (password: string) => Promise<any>;
     updateUserEmail: (email: string) => Promise<any>;
+    updateUserName: (name: string) => Promise<string>;
     isAuthenticated: boolean;
     sessionLoading: boolean;
 
@@ -504,6 +505,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { data, error } = await supabase.auth.updateUser({ email });
         if (error) throw error;
         return data;
+    };
+    // Altera só o nome do próprio usuário (função no banco, sem acesso a role/vínculos).
+    const updateUserName = async (name: string) => {
+        const { data, error } = await supabase.rpc('update_own_profile_name', { new_name: name });
+        if (error) throw error;
+        const savedName = data as string;
+        setUser(current => current ? { ...current, name: savedName } : current);
+        setUsers(current => current.map(item => item.id === user?.id ? { ...item, name: savedName } : item));
+        return savedName;
     };
     const addUnit = async (u: Omit<Unit, 'createdAt'>) => {
         const payload: any = {
@@ -805,7 +815,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return (
         <AuthContext.Provider value={{
             user, login, logout, isAuthenticated: !!user, sessionLoading,
-            updateUserEmail, updateUserPassword,
+            updateUserEmail, updateUserPassword, updateUserName,
             units, dataGroups, fields, entries, fieldValues, collectionItems, collectionFieldValues, regionalCommands, unitRegionalCommands, regionalBriefingTopics, regionalBriefingSections, regionalBriefingFields, regionalBriefingEntries, regionalBriefingValues, regionalBriefingCollectionItems, regionalBriefingCollectionValues, users, notifications, responsibleSectors, unitUpdateAlertRules,
             refreshData: fetchAllData,
             addUnit, updateUnit, deleteUnit, addDataGroup, updateDataGroup, deleteDataGroup,

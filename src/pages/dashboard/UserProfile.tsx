@@ -5,13 +5,18 @@ import { sortByTextPtBr } from '../../utils/textOrdering';
 import { isGeneralBriefingUnit } from '../../utils/generalBriefingUnits';
 
 export default function UserProfile() {
-    const { user, updateUserPassword, updateUserEmail, units, regionalCommands } = useAuth();
+    const { user, updateUserPassword, updateUserEmail, updateUserName, units, regionalCommands } = useAuth();
 
     const [newPassword, setNewPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [passwordError, setPasswordError] = useState('');
     const [passwordSuccess, setPasswordSuccess] = useState('');
     const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+
+    const [newName, setNewName] = useState(user?.name || '');
+    const [nameError, setNameError] = useState('');
+    const [nameSuccess, setNameSuccess] = useState('');
+    const [isUpdatingName, setIsUpdatingName] = useState(false);
 
     const [newEmail, setNewEmail] = useState(user?.email || '');
     const [emailError, setEmailError] = useState('');
@@ -21,6 +26,7 @@ export default function UserProfile() {
     useEffect(() => {
         if (user) {
             setNewEmail(user.email);
+            setNewName(user.name);
         }
     }, [user]);
 
@@ -49,6 +55,28 @@ export default function UserProfile() {
             setPasswordError(error.message || 'Erro ao alterar a senha.');
         } finally {
             setIsUpdatingPassword(false);
+        }
+    };
+
+    const handleNameSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        setNameError('');
+        setNameSuccess('');
+
+        const trimmedName = newName.trim().replace(/\s+/g, ' ');
+        if (trimmedName.length < 3) {
+            setNameError('Informe um nome com pelo menos 3 caracteres.');
+            return;
+        }
+
+        try {
+            setIsUpdatingName(true);
+            await updateUserName(trimmedName);
+            setNameSuccess('Nome atualizado. Ele já aparece nos relatórios e registros de atualização.');
+        } catch (error: any) {
+            setNameError(error.message || 'Erro ao alterar o nome.');
+        } finally {
+            setIsUpdatingName(false);
         }
     };
 
@@ -123,13 +151,6 @@ export default function UserProfile() {
 
                         <div className="space-y-4">
                             <div>
-                                <label className="text-xs font-semibold text-pm-secondary uppercase tracking-wider mb-1 block">Nome Completo</label>
-                                <div className="text-pm-dark font-medium bg-gray-50 p-2.5 rounded-lg border border-gray-100">
-                                    {user?.name || 'Não informado'}
-                                </div>
-                            </div>
-
-                            <div>
                                 <label className="text-xs font-semibold text-pm-secondary uppercase tracking-wider mb-1 flex items-center gap-1">
                                     <Briefcase className="w-3.5 h-3.5" />
                                     Perfil de Acesso
@@ -166,13 +187,62 @@ export default function UserProfile() {
 
                         <div className="mt-6 pt-5 border-t border-gray-100 text-xs text-pm-secondary">
                             <AlertCircle className="w-4 h-4 inline-block mr-1 text-yellow-500" />
-                            A alteração de Unidade, Cargo ou Nome é feita apenas por Administradores.
+                            A alteração de Unidade ou Cargo é feita apenas por Administradores.
                         </div>
                     </div>
                 </div>
 
                 {/* Coluna 2 e 3: Formulários */}
                 <div className="space-y-6 lg:col-span-2">
+
+                    {/* Alteração de Nome */}
+                    <div className="bg-white rounded-2xl shadow-sm border border-pm-primary/10 p-6">
+                        <h2 className="text-lg font-bold text-pm-dark mb-4 flex items-center gap-2">
+                            <UserIcon className="w-5 h-5 text-pm-primary" />
+                            Nome
+                        </h2>
+
+                        <form onSubmit={handleNameSubmit} className="space-y-4">
+                            <div>
+                                <label className="block text-sm font-medium text-pm-dark mb-1">
+                                    Nome de exibição
+                                </label>
+                                <input
+                                    type="text"
+                                    value={newName}
+                                    onChange={(e) => setNewName(e.target.value)}
+                                    maxLength={120}
+                                    className="w-full px-4 py-2 border border-gray-200 rounded-xl focus:ring-2 focus:ring-pm-primary/20 focus:border-pm-primary outline-none transition-all"
+                                    disabled={isUpdatingName}
+                                    placeholder="Ex.: Cap PM Eric Robert"
+                                />
+                                <p className="text-xs text-pm-secondary mt-1 ml-1">Aparece nos relatórios como responsável e autor das atualizações.</p>
+                            </div>
+
+                            {nameError && (
+                                <div className="p-3 bg-red-50 text-red-600 rounded-lg text-sm border border-red-100">
+                                    {nameError}
+                                </div>
+                            )}
+
+                            {nameSuccess && (
+                                <div className="p-3 bg-green-50 text-green-700 rounded-lg text-sm border border-green-100 font-medium">
+                                    {nameSuccess}
+                                </div>
+                            )}
+
+                            <div className="flex justify-end pt-2">
+                                <button
+                                    type="submit"
+                                    disabled={isUpdatingName || newName.trim() === user?.name}
+                                    className="px-6 py-2.5 bg-pm-dark text-white rounded-xl hover:bg-pm-secondary transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 font-medium"
+                                >
+                                    {isUpdatingName ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                                    Salvar Nome
+                                </button>
+                            </div>
+                        </form>
+                    </div>
 
                     {/* Alteraçao de E-mail */}
                     <div className="bg-white rounded-2xl shadow-sm border border-pm-primary/10 p-6">
