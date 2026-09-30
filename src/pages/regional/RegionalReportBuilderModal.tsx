@@ -29,7 +29,8 @@ import { isGeneralBriefingUnit } from '../../utils/generalBriefingUnits';
 import {
     type ReportHighlightColor,
     type ReportHighlightTarget,
-    type ReportTableHighlightRule
+    type ReportTableHighlightRule,
+    markPrintFittingTables
 } from '../dashboard/components/reportPdfShared';
 import RegionalReportPdfRenderer from './RegionalReportPdfRenderer';
 import {
@@ -284,7 +285,8 @@ export default function RegionalReportBuilderModal({
 
     const handlePrint = useReactToPrint({
         contentRef: printRef,
-        documentTitle: `Briefing Regional PMBA - ${selectedCommand?.name || 'Regional'} - ${new Date().toISOString().split('T')[0]}`
+        documentTitle: `Briefing Regional PMBA - ${selectedCommand?.name || 'Regional'} - ${new Date().toISOString().split('T')[0]}`,
+        onBeforePrint: async () => markPrintFittingTables(printRef.current)
     });
 
     const handleDownloadPdf = async () => {

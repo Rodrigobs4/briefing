@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 import { useReactToPrint } from 'react-to-print';
 import ReportPdfRenderer from './ReportPdfRenderer';
+import { markPrintFittingTables } from './reportPdfShared';
 import { supabase } from '../../../lib/supabase';
 import { compareTextPtBr, sortByTextPtBr } from '../../../utils/textOrdering';
 import { isGeneralBriefingUnit } from '../../../utils/generalBriefingUnits';
@@ -253,7 +254,8 @@ export default function ReportBuilderModal({ onClose }: { onClose: () => void })
 
     const handlePrint = useReactToPrint({
         contentRef: printRef,
-        documentTitle: `Briefing Geral PMBA - ${new Date().toISOString().split('T')[0]}`
+        documentTitle: `Briefing Geral PMBA - ${new Date().toISOString().split('T')[0]}`,
+        onBeforePrint: async () => markPrintFittingTables(printRef.current)
     });
 
     const handleDownloadPdf = async () => {

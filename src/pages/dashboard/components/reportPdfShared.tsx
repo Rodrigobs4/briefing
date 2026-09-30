@@ -304,6 +304,20 @@ export const CompactTable = ({
     </div>
 );
 
+// A4 retrato com margens de 10mm: 190mm úteis de largura por 277mm de altura.
+const PRINT_PAGE_HEIGHT_PER_WIDTH = 277 / 190;
+// Folga para o texto que quebra mais linhas na largura impressa do que na tela.
+const PRINT_FIT_SAFETY = 0.8;
+
+/** Marca as tabelas que cabem em uma página impressa, para não serem divididas. */
+export const markPrintFittingTables = (root: HTMLElement | null) => {
+    if (!root) return;
+    const pageHeight = root.offsetWidth * PRINT_PAGE_HEIGHT_PER_WIDTH * PRINT_FIT_SAFETY;
+    root.querySelectorAll<HTMLElement>('.report-table-keep-together').forEach(table => {
+        table.classList.toggle('report-fits-page', table.offsetHeight <= pageHeight);
+    });
+};
+
 export const REPORT_PDF_STYLES = `
                 @media print {
                     @page { 
@@ -341,20 +355,20 @@ export const REPORT_PDF_STYLES = `
                     }
                     .report-collection-panel,
                     .report-metric-panel,
-                    .report-text-panel,
-                    .report-table-keep-together {
-                        break-inside: avoid-page !important;
-                        page-break-inside: avoid !important;
+                    .report-text-panel {
+                        break-inside: avoid-page;
+                        page-break-inside: avoid;
                     }
+                    /* Tabelas que cabem em uma página (marcadas por markPrintFittingTables) ficam
+                       inteiras via inline-block. As maiores quebram entre linhas e repetem o
+                       cabeçalho; inline-block nelas corta as linhas e desalinha as páginas seguintes. */
                     .report-table-keep-together {
+                        display: block !important;
+                    }
+                    .report-table-keep-together.report-fits-page {
                         display: inline-block !important;
                         vertical-align: top;
                         width: 100%;
-                    }
-                    .report-table-keep-together table,
-                    .report-table-keep-together thead,
-                    .report-table-keep-together tbody,
-                    .report-table-keep-together tr {
                         break-inside: avoid !important;
                         page-break-inside: avoid !important;
                     }
@@ -368,17 +382,10 @@ export const REPORT_PDF_STYLES = `
                         border: 1px solid #cbd5e1;
                     }
                     .report-text-content {
-                        break-inside: avoid !important;
-                        page-break-inside: avoid !important;
-                    }
-                    .report-font-large .report-collection-panel,
-                    .report-font-large .report-metric-panel,
-                    .report-font-large .report-text-panel,
-                    .report-font-large .report-table-keep-together,
-                    .report-font-large .report-table-keep-together table,
-                    .report-font-large .report-table-keep-together tbody {
-                        break-inside: avoid-page !important;
-                        page-break-inside: avoid !important;
+                        break-inside: avoid;
+                        page-break-inside: avoid;
+                        orphans: 3;
+                        widows: 3;
                     }
                     .report-font-large .report-section-header,
                     .report-font-large .report-table tr {
