@@ -675,7 +675,10 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                             const totalFields = collectionFields.filter(field =>
                                                 ['number', 'currency', 'calculated'].includes(field.type) && !isExplicitTotalField(field)
                                             );
-                                            const showCollectionTotalColumn = group.showTotal && totalFields.length > 0 && !hasExplicitTotalField;
+                                            const canTotal = group.showTotal && totalFields.length > 0 && !hasExplicitTotalField;
+                                            // Coluna de total por linha só faz sentido com mais de um campo numérico.
+                                            const showCollectionTotalColumn = canTotal && totalFields.length > 1;
+                                            const showCollectionTotalRow = canTotal && itemsToRender.length > 1;
                                             const totalIsCurrency = totalFields.length > 0 && totalFields.every(field => field.type === 'currency');
                                             const getCollectionRawNumber = (itemId: string, field: any) => {
                                                 const itemValues = getValuesForItem(itemId);
@@ -709,6 +712,36 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                                 );
                                             };
 
+                                            const formatCollectionTotal = (total: number, isCurrency: boolean) =>
+                                                isCurrency ? formatBrazilianNumber(total, true) : total.toLocaleString('pt-BR');
+                                            const sumCollectionField = (field: any) => itemsToRender
+                                                .map(item => getCollectionRawNumber(item.id, field))
+                                                .reduce<number>((sum, value) => sum + (value ?? 0), 0);
+                                            const totalLabelIndex = Math.max(0, collectionFields.findIndex(field => !totalFields.includes(field)));
+                                            const collectionTotalRow = [
+                                                ...collectionFields.map((field, index) => {
+                                                    if (totalFields.includes(field)) {
+                                                        return (
+                                                            <MetricValue
+                                                                key={`${group.id}-${field.id}-total-row`}
+                                                                value={formatCollectionTotal(sumCollectionField(field), field.type === 'currency')}
+                                                                label="Total"
+                                                            />
+                                                        );
+                                                    }
+                                                    return index === totalLabelIndex ? <strong key={`${group.id}-total-label`}>TOTAL</strong> : '';
+                                                }),
+                                                ...(showCollectionTotalColumn
+                                                    ? [
+                                                        <MetricValue
+                                                            key={`${group.id}-grand-total`}
+                                                            value={formatCollectionTotal(totalFields.reduce((sum, field) => sum + sumCollectionField(field), 0), totalIsCurrency)}
+                                                            label="Total"
+                                                        />
+                                                    ]
+                                                    : [])
+                                            ];
+
                                             return (
                                                 <div key={group.id} className="report-metric-panel break-inside-avoid">
                                                     <CompactTable
@@ -723,7 +756,8 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                                                     ...collectionFields.map(field => renderCollectionFieldValue(item.id, field)),
                                                                     ...(showCollectionTotalColumn ? [renderCollectionTotal(item.id)] : [])
                                                                 ]
-                                                            )
+                                                            ),
+                                                            ...(showCollectionTotalRow ? [collectionTotalRow] : [])
                                                         ]}
                                                         colWidths={getCollectionColumnWidths(collectionFields, showCollectionTotalColumn)}
                                                         variant="metrics"
