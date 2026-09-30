@@ -18,6 +18,9 @@ import {
     formatCollectionValue,
     isDateOrPeriodField,
     getYearMetricInfo,
+    ValueWithNote,
+    isEditalNoteField,
+    formatEditalNote,
     getMetricGroupKey,
     getMetricLabelWithoutYear,
     getYearFromText,
@@ -360,15 +363,23 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                 groupEntriesByYear.set(currentYear, legacyEntry);
                             }
 
+                            // Campo "Edital" não vira linha: aparece como nota pequena (*Edital 2024)
+                            // abaixo do valor da linha anterior (ex.: Fase Atual) no mesmo ano.
+                            const noteField = groupFields.find(isEditalNoteField);
+                            const rowFields = groupFields.filter(field => !isEditalNoteField(field));
+                            const noteTargetId = noteField ? rowFields[rowFields.length - 1]?.id : undefined;
+
                             acc.rows.push(
                                 { type: 'section', label: group.title, groupId: group.id },
-                                ...groupFields.map(field => ({
+                                ...rowFields.map(field => ({
                                     type: 'yearly' as const,
                                     label: field.name,
                                     valuesByYear: Object.fromEntries(getReportYearColumns(groupEntriesByYear.keys()).map(year => {
                                         const entry = groupEntriesByYear.get(year);
                                         const values = entry ? getValuesForEntry(entry.id) : [];
-                                        return [year, entry ? getVal(field, values) : '-'];
+                                        const value = entry ? getVal(field, values) : '-';
+                                        const note = noteField && field.id === noteTargetId && entry ? getVal(noteField, values) : '-';
+                                        return [year, note === '-' ? value : <ValueWithNote key={`${field.id}-${year}-note`} value={value} note={formatEditalNote(String(note))} />];
                                     })),
                                     showTotal: group.showTotal && ['number', 'currency', 'percentage', 'calculated'].includes(field.type),
                                     isCurrency: field.type === 'currency',
@@ -542,9 +553,8 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                             periodChunks.forEach((periods, periodChunkIndex) => {
                                 const showYearColumns = periods.length > 1 || (isMonthlyComparison && periods.length > 0);
                                 const totalHeader = periodChunks.length > 1 ? 'Total geral' : 'Total';
-                                const periodLabel = dataGroups.find(group => group.id === activeSectionGroupId)?.periodLabel?.trim() || 'Ano';
                                 const headers = showYearColumns
-                                    ? ['Indicador', ...periods.map(period => isMonthlyComparison ? formatMonthlyPeriod(period) : `${periodLabel} ${period}`), ...(showTotalColumn ? [totalHeader] : [])]
+                                    ? ['Indicador', ...periods.map(period => isMonthlyComparison ? formatMonthlyPeriod(period) : `Ano ${period}`), ...(showTotalColumn ? [totalHeader] : [])]
                                     : ['Indicador', 'Total'];
                                 const rows = yearlyRows.map<TableRow>(row => {
                                     const total = row.showTotal ? getMetricTotal(row.valuesByYear, blockYears, row.isCurrency) : '-';

@@ -207,7 +207,6 @@ export default function AdminDynamicForms() {
     const [newGroupMode, setNewGroupMode] = useState<'snapshot' | 'collection'>('snapshot');
     const [newGroupUpdateFrequency, setNewGroupUpdateFrequency] = useState<DataGroupUpdateFrequency>('fixed');
     const [newGroupShowTotal, setNewGroupShowTotal] = useState(true);
-    const [newGroupPeriodLabel, setNewGroupPeriodLabel] = useState('');
     const [newGroupCollectionLayout, setNewGroupCollectionLayout] = useState<DataGroupCollectionLayout>('narrative');
     const [newGroupReportLayout, setNewGroupReportLayout] = useState<DataGroupReportLayout>('table');
     const [groupError, setGroupError] = useState('');
@@ -230,7 +229,6 @@ export default function AdminDynamicForms() {
     const [editGroupTitle, setEditGroupTitle] = useState('');
     const [editGroupUpdateFrequency, setEditGroupUpdateFrequency] = useState<DataGroupUpdateFrequency>('fixed');
     const [editGroupShowTotal, setEditGroupShowTotal] = useState(true);
-    const [editGroupPeriodLabel, setEditGroupPeriodLabel] = useState('');
     const [editGroupCollectionLayout, setEditGroupCollectionLayout] = useState<DataGroupCollectionLayout>('narrative');
     const [editGroupReportLayout, setEditGroupReportLayout] = useState<DataGroupReportLayout>('table');
     const [deletingGroup, setDeletingGroup] = useState<any>(null);
@@ -423,8 +421,7 @@ export default function AdminDynamicForms() {
                 collectionLayout: newGroupMode === 'collection' ? newGroupCollectionLayout : 'narrative',
                 reportLayout: newGroupMode === 'snapshot' ? newGroupReportLayout : 'table',
                 categoryTitle: null,
-                categoryOrder: 999,
-                periodLabel: newGroupUpdateFrequency === 'yearly' ? newGroupPeriodLabel.trim() || null : null
+                categoryOrder: 999
             });
         } catch (error: any) {
             setGroupError(`Não foi possível salvar a seção. ${error.message || 'Verifique se a migration de periodicidade foi aplicada.'}`);
@@ -434,7 +431,6 @@ export default function AdminDynamicForms() {
         setNewGroupMode('snapshot');
         setNewGroupUpdateFrequency('fixed');
         setNewGroupShowTotal(true);
-        setNewGroupPeriodLabel('');
         setNewGroupCollectionLayout('narrative');
         setNewGroupReportLayout('table');
         setSelectedGroup(newId);
@@ -457,8 +453,7 @@ export default function AdminDynamicForms() {
                 collectionLayout: groupToCopy.collectionLayout ?? 'narrative',
                 reportLayout: groupToCopy.reportLayout ?? 'table',
                 categoryTitle: null,
-                categoryOrder: 999,
-                periodLabel: groupToCopy.periodLabel ?? null
+                categoryOrder: 999
             });
         } catch (error: any) {
             setGroupError(`Não foi possível duplicar a seção. ${error.message || 'Verifique a configuração do banco de dados.'}`);
@@ -482,8 +477,7 @@ export default function AdminDynamicForms() {
                 updateFrequency: editingGroup.mode === 'snapshot' && editGroupReportLayout === 'table' ? editGroupUpdateFrequency : 'fixed',
                 showTotal: shouldSaveShowTotal ? editGroupShowTotal : false,
                 collectionLayout: editingGroup.mode === 'collection' ? editGroupCollectionLayout : 'narrative',
-                reportLayout: editingGroup.mode === 'snapshot' ? editGroupReportLayout : 'table',
-                periodLabel: editGroupUpdateFrequency === 'yearly' ? editGroupPeriodLabel.trim() || null : null
+                reportLayout: editingGroup.mode === 'snapshot' ? editGroupReportLayout : 'table'
             });
         } catch (error: any) {
             setGroupError(`Não foi possível salvar a periodicidade. ${error.message || 'A migration da periodicidade precisa estar aplicada no banco.'}`);
@@ -1015,22 +1009,6 @@ export default function AdminDynamicForms() {
                                             </p>
                                         </div>
                                     )}
-                                    {newGroupMode === 'snapshot' && newGroupReportLayout === 'table' && newGroupUpdateFrequency === 'yearly' && (
-                                        <div>
-                                            <label className="input-label">RÓTULO DAS COLUNAS DE ANO</label>
-                                            <input
-                                                type="text"
-                                                value={newGroupPeriodLabel}
-                                                onChange={e => setNewGroupPeriodLabel(e.target.value)}
-                                                placeholder="Ano"
-                                                maxLength={20}
-                                                className="input-field"
-                                            />
-                                            <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
-                                                Ex.: "Edital" gera as colunas Edital 2023, Edital 2024...
-                                            </p>
-                                        </div>
-                                    )}
                                     {newGroupMode === 'snapshot' && newGroupReportLayout === 'table' && newGroupUpdateFrequency !== 'fixed' && (
                                         <div>
                                             <label className="input-label">TOTAL NO RELATÓRIO</label>
@@ -1164,7 +1142,7 @@ export default function AdminDynamicForms() {
                                                 <Copy className="w-4 h-4" />
                                             </button>
                                             <button
-                                                onClick={(e) => { e.stopPropagation(); setGroupError(''); setEditingGroup(g); setEditGroupTitle(g.title); setEditGroupUpdateFrequency(g.updateFrequency ?? 'fixed'); setEditGroupShowTotal(g.showTotal ?? true); setEditGroupPeriodLabel(g.periodLabel ?? ''); setEditGroupCollectionLayout(g.collectionLayout ?? 'narrative'); setEditGroupReportLayout(g.reportLayout ?? 'table'); }}
+                                                onClick={(e) => { e.stopPropagation(); setGroupError(''); setEditingGroup(g); setEditGroupTitle(g.title); setEditGroupUpdateFrequency(g.updateFrequency ?? 'fixed'); setEditGroupShowTotal(g.showTotal ?? true); setEditGroupCollectionLayout(g.collectionLayout ?? 'narrative'); setEditGroupReportLayout(g.reportLayout ?? 'table'); }}
                                                 className={`p-2 rounded-xl transition-all ${selectedGroup === g.id ? 'bg-white/10 text-white hover:bg-white/20' : 'bg-white text-pm-secondary hover:text-pm-primary shadow-premium border border-pm-secondary/10'}`}
                                             >
                                                 <Edit2 className="w-4 h-4" />
@@ -1725,22 +1703,6 @@ export default function AdminDynamicForms() {
                                         <option value="monthly">Comparativo mensal</option>
                                         <option value="yearly">Comparativo anual (2023 em diante)</option>
                                     </select>
-                                </div>
-                            )}
-                            {editingGroup.mode === 'snapshot' && editGroupReportLayout === 'table' && editGroupUpdateFrequency === 'yearly' && (
-                                <div>
-                                    <label className="input-label">RÓTULO DAS COLUNAS DE ANO</label>
-                                    <input
-                                        type="text"
-                                        value={editGroupPeriodLabel}
-                                        onChange={e => setEditGroupPeriodLabel(e.target.value)}
-                                        placeholder="Ano"
-                                        maxLength={20}
-                                        className="input-field h-14"
-                                    />
-                                    <p className="text-[10px] text-pm-secondary/60 font-bold mt-2 uppercase tracking-wider">
-                                        Ex.: "Edital" gera as colunas Edital 2023, Edital 2024...
-                                    </p>
                                 </div>
                             )}
                             {editingGroup.mode === 'snapshot' && editGroupReportLayout === 'table' && editGroupUpdateFrequency !== 'fixed' && (

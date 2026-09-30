@@ -81,6 +81,22 @@ export const getMetricTotal = (valuesByYear: Record<string, ReactNode>, years: s
     return values[0];
 };
 
+/** Campo de seção anual usado só como referência (ex.: "Edital") e exibido como nota. */
+export const isEditalNoteField = (field: { name?: string | null }) =>
+    String(field?.name ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase() === 'edital';
+
+export const formatEditalNote = (value: string) => {
+    const note = value.trim();
+    return /^edital\b/i.test(note) ? `*${note}` : `*Edital ${note}`;
+};
+
+export const ValueWithNote = ({ value, note }: { value: ReactNode; note: string }) => (
+    <span className="report-value-neutral">
+        {value}
+        <span className="report-cell-note">{note}</span>
+    </span>
+);
+
 export const MetricValue = ({ value, label }: { value: ReactNode; label: ReactNode }) => {
     const numericValue = parseDisplayNumber(value);
     const isCurrency = typeof value === 'string' && value.includes('R$');
@@ -977,6 +993,16 @@ export const REPORT_PDF_STYLES = `
 
                 .report-font-large .executive-stat-card strong {
                     font-size: 34px;
+                }
+
+                .report-cell-note {
+                    display: block;
+                    margin-top: 2px;
+                    color: #64748b;
+                    font-size: 8.5px;
+                    font-weight: 700;
+                    line-height: 1.2;
+                    letter-spacing: 0;
                 }
 
                 .report-value-neutral {
