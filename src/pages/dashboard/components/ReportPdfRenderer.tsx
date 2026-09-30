@@ -675,10 +675,12 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                             const totalFields = collectionFields.filter(field =>
                                                 ['number', 'currency', 'calculated'].includes(field.type) && !isExplicitTotalField(field)
                                             );
-                                            const canTotal = group.showTotal && totalFields.length > 0 && !hasExplicitTotalField;
-                                            // Coluna de total por linha só faz sentido com mais de um campo numérico.
-                                            const showCollectionTotalColumn = canTotal && totalFields.length > 1;
-                                            const showCollectionTotalRow = canTotal && itemsToRender.length > 1;
+                                            // Coluna de total por linha só faz sentido com mais de um campo numérico
+                                            // e quando a própria seção não tem uma coluna "Total".
+                                            const showCollectionTotalColumn = group.showTotal && totalFields.length > 1 && !hasExplicitTotalField;
+                                            // A linha de total soma todas as colunas numéricas, inclusive a coluna "Total" da seção.
+                                            const totalRowFields = collectionFields.filter(field => ['number', 'currency', 'calculated'].includes(field.type));
+                                            const showCollectionTotalRow = group.showTotal && totalRowFields.length > 0 && itemsToRender.length > 1;
                                             const totalIsCurrency = totalFields.length > 0 && totalFields.every(field => field.type === 'currency');
                                             const getCollectionRawNumber = (itemId: string, field: any) => {
                                                 const itemValues = getValuesForItem(itemId);
@@ -717,10 +719,10 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                             const sumCollectionField = (field: any) => itemsToRender
                                                 .map(item => getCollectionRawNumber(item.id, field))
                                                 .reduce<number>((sum, value) => sum + (value ?? 0), 0);
-                                            const totalLabelIndex = Math.max(0, collectionFields.findIndex(field => !totalFields.includes(field)));
+                                            const totalLabelIndex = Math.max(0, collectionFields.findIndex(field => !totalRowFields.includes(field)));
                                             const collectionTotalRow = [
                                                 ...collectionFields.map((field, index) => {
-                                                    if (totalFields.includes(field)) {
+                                                    if (totalRowFields.includes(field)) {
                                                         return (
                                                             <MetricValue
                                                                 key={`${group.id}-${field.id}-total-row`}
