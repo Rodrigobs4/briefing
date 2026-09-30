@@ -25,13 +25,16 @@ export default function DynamicEditorPanel() {
             ? user.unitIds
             : (user?.unitId ? [user.unitId] : []);
 
+        // Admin alimenta qualquer tópico ao usar a visão do editor.
+        const isAdmin = user?.role === 'admin';
+
         return units
-            .filter(unit => userUnitIds.includes(unit.id) && isGeneralBriefingUnit(unit, regionalCommands))
+            .filter(unit => (isAdmin || userUnitIds.includes(unit.id)) && isGeneralBriefingUnit(unit, regionalCommands))
             .sort((left, right) =>
                 (left.order_index ?? 999) - (right.order_index ?? 999)
                 || compareTextPtBr(left.name, right.name)
             );
-    }, [units, regionalCommands, user?.unitId, user?.unitIds]);
+    }, [units, regionalCommands, user?.role, user?.unitId, user?.unitIds]);
 
     // Estado para o tópico selecionado
     const [selectedUnitId, setSelectedUnitId] = useState<string | null>(userUnits[0]?.id || null);
