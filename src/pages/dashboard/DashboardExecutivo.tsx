@@ -1,4 +1,5 @@
-import { lazy, Suspense, useState, useMemo, useEffect } from "react";
+import { lazy, Suspense, useState, useMemo, useEffect, useRef } from "react";
+import { useReactToPrint } from "react-to-print";
 import { useAuth, calculateFieldValue } from "../../store/AuthContext";
 import {
   Clock,
@@ -49,12 +50,14 @@ import {
   Search,
   Sparkles,
   TrendingUp,
+  Printer,
 } from "lucide-react";
 import { getPublicUploadUrl } from "../../utils/storageUrls";
 import { sortByTextPtBr } from "../../utils/textOrdering";
 import { formatBrazilianNumber } from "../../utils/brazilianNumbers";
 import { isGeneralBriefingUnit } from "../../utils/generalBriefingUnits";
 import { evaluateUnitUpdateAlert } from "../../utils/unitUpdateAlertCycle";
+import UpdateAlertsReport from "./components/UpdateAlertsReport";
 
 const GeneralTrendChart = lazy(() =>
   import("./components/DashboardCharts").then((module) => ({ default: module.GeneralTrendChart })),
@@ -326,6 +329,12 @@ export default function DashboardExecutivo() {
     if (updateAlertFilter === "all") return updateAlerts;
     return updateAlerts.filter((alert) => alert.status === updateAlertFilter);
   }, [updateAlertFilter, updateAlerts]);
+
+  const updateAlertsPrintRef = useRef<HTMLDivElement>(null);
+  const handlePrintUpdateAlerts = useReactToPrint({
+    contentRef: updateAlertsPrintRef,
+    documentTitle: `Controle de Atualização - PMBA - ${new Date().toISOString().split("T")[0]}`,
+  });
 
   const handleUpdateAlertFilter = (nextFilter: UpdateAlertFilter) => {
     setUpdateAlertFilter((current) => (current === nextFilter && nextFilter !== "all" ? "all" : nextFilter));
@@ -997,6 +1006,26 @@ export default function DashboardExecutivo() {
       </div>
 
       {user?.role !== "editor" && updateAlerts.length > 0 && (
+        <div style={{ display: "none" }}>
+          <div ref={updateAlertsPrintRef}>
+            <UpdateAlertsReport
+              alerts={filteredUpdateAlerts.map((alert) => ({
+                unitId: alert.unit.id,
+                unitName: alert.unit.name,
+                responsibleSector: alert.unit.responsibleSector ?? null,
+                responsibleUpdater: alert.responsibleUpdater,
+                dueAt: alert.dueAt,
+                lastUpdateAt: alert.lastUpdateAt,
+                status: alert.status,
+              }))}
+              counts={{ overdue: overdueAlertCount, pending: pendingAlertCount, complete: completeAlertCount }}
+              filterLabel={updateAlertFilter === "all" ? null : UPDATE_ALERT_STATUS_LABEL[updateAlertFilter]}
+            />
+          </div>
+        </div>
+      )}
+
+      {user?.role !== "editor" && updateAlerts.length > 0 && (
         <section className="rounded-2xl border border-pm-secondary/15 bg-white p-4 shadow-sm sm:p-5">
           <div className="flex flex-col gap-4">
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
@@ -1011,6 +1040,14 @@ export default function DashboardExecutivo() {
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => handlePrintUpdateAlerts()}
+                  title="Gerar PDF com os tópicos do filtro atual"
+                  className="flex items-center gap-1.5 rounded-xl border border-pm-secondary/20 bg-white px-3 py-2 text-[10px] font-black uppercase tracking-wider text-pm-dark transition-colors hover:border-pm-primary/40 hover:bg-pm-light"
+                >
+                  <Printer className="h-3.5 w-3.5" /> PDF
+                </button>
                 {(
                   [
                     { id: "all" as const, label: "Todos", count: updateAlerts.length },
