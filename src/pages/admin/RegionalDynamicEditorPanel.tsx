@@ -32,11 +32,10 @@ import {
     formDataToRegionalValues,
     getRegionalStoredValue
 } from '../regional/regionalBriefingFieldUtils';
+import { CURRENT_REPORT_YEAR } from '../../utils/reportYears';
+import ReferenceYearSelect from '../../components/ReferenceYearSelect';
 
-const FIRST_REPORT_YEAR = 2023;
-const CURRENT_REPORT_YEAR = Math.max(FIRST_REPORT_YEAR, new Date().getFullYear());
 const CURRENT_REPORT_MONTH = new Date().getMonth() + 1;
-const REPORT_YEARS = Array.from({ length: CURRENT_REPORT_YEAR - FIRST_REPORT_YEAR + 1 }, (_, index) => CURRENT_REPORT_YEAR - index);
 const REPORT_MONTHS = Array.from({ length: 12 }, (_, index) => ({
     value: index + 1,
     label: new Date(2026, index).toLocaleDateString('pt-BR', { month: 'long' })
@@ -53,7 +52,7 @@ const getSectionFrequencyLabel = (section: RegionalBriefingSection) => {
 };
 
 export default function RegionalDynamicEditorPanel() {
-    const { user, regionalCommands, regionalBriefingSections, regionalBriefingFields } = useAuth();
+    const { user, regionalCommands, regionalBriefingSections, regionalBriefingFields, regionalBriefingEntries } = useAuth();
 
     const accessibleCommands = useMemo(() =>
         getAccessibleRegionalCommands(regionalCommands, user)
@@ -81,6 +80,12 @@ export default function RegionalDynamicEditorPanel() {
     const [activeSection, setActiveSection] = useState<RegionalBriefingSection | null>(mySections[0] ?? null);
     const [formData, setFormData] = useState<Record<string, string>>({});
     const [referenceYear, setReferenceYear] = useState(CURRENT_REPORT_YEAR);
+    const yearsWithData = useMemo(
+        () => regionalBriefingEntries
+            .filter(entry => entry.regionalCommandId === selectedCommandId && entry.sectionId === activeSection?.id)
+            .map(entry => entry.referenceYear ?? (entry.referenceStartDate ? Number(entry.referenceStartDate.slice(0, 4)) : null)),
+        [regionalBriefingEntries, selectedCommandId, activeSection?.id]
+    );
     const [referenceMonth, setReferenceMonth] = useState(CURRENT_REPORT_MONTH);
     const [periodSemester, setPeriodSemester] = useState<'1' | '2'>('1');
     const [weekStartDate, setWeekStartDate] = useState(todayIsoDate());
@@ -510,13 +515,12 @@ export default function RegionalDynamicEditorPanel() {
                     {['monthly', 'semester', 'yearly'].includes(sectionFrequency) && (
                         <div>
                             <label className="block text-[10px] font-black uppercase tracking-widest text-pm-secondary mb-2">Ano de referência</label>
-                            <select
+                            <ReferenceYearSelect
                                 value={referenceYear}
-                                onChange={event => setReferenceYear(Number(event.target.value))}
+                                onChange={setReferenceYear}
+                                yearsWithData={yearsWithData}
                                 className="w-full border border-pm-secondary/30 rounded-lg px-4 py-3 text-sm font-bold bg-white focus:ring-2 focus:ring-pm-primary outline-none"
-                            >
-                                {REPORT_YEARS.map(year => <option key={year} value={year}>{year}</option>)}
-                            </select>
+                            />
                         </div>
                     )}
                     {sectionFrequency === 'monthly' && (

@@ -9,7 +9,7 @@ import {
     type TableRow,
     type RawMetricRow,
     CURRENT_REPORT_YEAR,
-    REPORT_YEARS,
+    getReportYearColumns,
     formatMonthlyPeriod,
     SectionHeader,
     TextSection,
@@ -365,7 +365,7 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                 ...groupFields.map(field => ({
                                     type: 'yearly' as const,
                                     label: field.name,
-                                    valuesByYear: Object.fromEntries(REPORT_YEARS.map(year => {
+                                    valuesByYear: Object.fromEntries(getReportYearColumns(groupEntriesByYear.keys()).map(year => {
                                         const entry = groupEntriesByYear.get(year);
                                         const values = entry ? getValuesForEntry(entry.id) : [];
                                         return [year, entry ? getVal(field, values) : '-'];

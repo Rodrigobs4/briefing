@@ -5,19 +5,18 @@ import { supabase } from '../../lib/supabase';
 import { STORAGE_BUCKET_UPLOADS } from '../../config/storage';
 import { compareTextPtBr } from '../../utils/textOrdering';
 import { isGeneralBriefingUnit } from '../../utils/generalBriefingUnits';
+import { CURRENT_REPORT_YEAR } from '../../utils/reportYears';
+import ReferenceYearSelect from '../../components/ReferenceYearSelect';
 import { formatBrazilianNumber, formatBrazilianNumericInput, formatStoredNumericValue, parseBrazilianNumber } from '../../utils/brazilianNumbers';
 
-const FIRST_REPORT_YEAR = 2023;
-const CURRENT_REPORT_YEAR = Math.max(FIRST_REPORT_YEAR, new Date().getFullYear());
 const CURRENT_REPORT_MONTH = new Date().getMonth() + 1;
-const REPORT_YEARS = Array.from({ length: CURRENT_REPORT_YEAR - FIRST_REPORT_YEAR + 1 }, (_, index) => CURRENT_REPORT_YEAR - index);
 const REPORT_MONTHS = Array.from({ length: 12 }, (_, index) => ({
     value: index + 1,
     label: new Date(2026, index).toLocaleDateString('pt-BR', { month: 'long' })
 }));
 
 export default function DynamicEditorPanel() {
-    const { user, units, regionalCommands, dataGroups, fields, deleteCollectionItem, getValuesForItem } = useAuth();
+    const { user, units, regionalCommands, dataGroups, fields, entries, deleteCollectionItem, getValuesForItem } = useAuth();
 
     // Tópicos e seções seguem a mesma sequência definida na arquitetura do briefing.
     const userUnits = useMemo(() => {
@@ -51,6 +50,12 @@ export default function DynamicEditorPanel() {
     const [formData, setFormData] = useState<Record<string, any>>({});
     const [imagePreviews, setImagePreviews] = useState<Record<string, string[]>>({});
     const [referenceYear, setReferenceYear] = useState(CURRENT_REPORT_YEAR);
+    const yearsWithData = useMemo(
+        () => entries
+            .filter(entry => entry.unitId === selectedUnitId && entry.dataGroupId === activeGroup?.id)
+            .map(entry => entry.referenceYear),
+        [entries, selectedUnitId, activeGroup?.id]
+    );
     const [referenceMonth, setReferenceMonth] = useState(CURRENT_REPORT_MONTH);
 
     const [errorMess, setErrorMess] = useState('');
@@ -830,13 +835,12 @@ export default function DynamicEditorPanel() {
                                         <div className={`grid gap-3 ${activeGroup.updateFrequency === 'monthly' ? 'sm:grid-cols-2' : 'grid-cols-1'}`}>
                                             <div>
                                                 <label className="block text-[10px] font-black uppercase tracking-widest text-pm-secondary mb-2">Ano de referência</label>
-                                                <select
+                                                <ReferenceYearSelect
                                                     value={referenceYear}
-                                                    onChange={e => setReferenceYear(Number(e.target.value))}
+                                                    onChange={setReferenceYear}
+                                                    yearsWithData={yearsWithData}
                                                     className="w-full border border-pm-secondary/30 rounded-lg px-4 py-3 text-sm font-bold bg-white focus:ring-2 focus:ring-pm-primary outline-none"
-                                                >
-                                                    {REPORT_YEARS.map(year => <option key={year} value={year}>{year}</option>)}
-                                                </select>
+                                                />
                                             </div>
                                             {activeGroup.updateFrequency === 'monthly' && (
                                                 <div>

@@ -1,4 +1,5 @@
 import { formatBrazilianNumber } from '../../../utils/brazilianNumbers';
+import { getReportYears } from '../../../utils/reportYears';
 import { type ReactNode } from 'react';
 
 export type ReportHighlightTarget = 'row' | 'column' | 'cell';
@@ -12,9 +13,10 @@ export type ReportTableHighlightRule = {
     color: ReportHighlightColor;
 };
 
-export const FIRST_REPORT_YEAR = 2023;
-export const CURRENT_REPORT_YEAR = Math.max(FIRST_REPORT_YEAR, new Date().getFullYear());
-export const REPORT_YEARS = Array.from({ length: CURRENT_REPORT_YEAR - FIRST_REPORT_YEAR + 1 }, (_, index) => String(FIRST_REPORT_YEAR + index));
+export { FIRST_REPORT_YEAR, CURRENT_REPORT_YEAR } from '../../../utils/reportYears';
+// Colunas de ano do relatório: inclui anos anteriores a 2023 apenas quando houver dado.
+export const getReportYearColumns = (yearsWithData: Iterable<string | number>) =>
+    getReportYears(Array.from(yearsWithData)).map(String);
 export const formatMonthlyPeriod = (period: string) => {
     const [year, month] = period.split('-').map(Number);
     return new Date(year, month - 1).toLocaleDateString('pt-BR', { month: 'short', year: 'numeric' }).replace('.', '');

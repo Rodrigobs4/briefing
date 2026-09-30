@@ -8,7 +8,7 @@ import {
     type ReportTableHighlightRule,
     type TableRow,
     CURRENT_REPORT_YEAR,
-    REPORT_YEARS,
+    getReportYearColumns,
     formatMonthlyPeriod,
     SectionHeader,
     TextSection,
@@ -346,29 +346,30 @@ export default function RegionalReportPdfRenderer({
                 entriesByYear.set(currentYear, legacyEntry);
             }
 
+            const reportYears = getReportYearColumns(entriesByYear.keys());
             const showTotalColumn = printableFields.some(isNumericRegionalField);
             const hasCurrencyValues = printableFields.some(field => field.fieldType === 'currency');
             const headers = showTotalColumn
-                ? ['Indicador', ...REPORT_YEARS.map(year => `Ano ${year}`), 'Total']
-                : ['Indicador', ...REPORT_YEARS.map(year => `Ano ${year}`)];
+                ? ['Indicador', ...reportYears.map(year => `Ano ${year}`), 'Total']
+                : ['Indicador', ...reportYears.map(year => `Ano ${year}`)];
 
             const rows: TableRow[] = [
                 { type: 'section', label: section.title, groupId: section.id },
                 ...printableFields.map(field => {
                     const valuesByYear = Object.fromEntries(
-                        REPORT_YEARS.map(year => {
+                        reportYears.map(year => {
                             const entry = entriesByYear.get(year);
                             const valuesByField = getValuesByFieldId(entry?.id);
                             return [year, formatRegionalFieldValue(field, sectionFields, valuesByField)];
                         })
                     );
                     const total = showTotalColumn && isNumericRegionalField(field)
-                        ? getMetricTotal(valuesByYear, REPORT_YEARS, field.fieldType === 'currency')
+                        ? getMetricTotal(valuesByYear, reportYears, field.fieldType === 'currency')
                         : '-';
 
                     return [
                         field.label,
-                        ...REPORT_YEARS.map(year => <MetricValue key={`${field.id}-${year}`} value={valuesByYear[year] ?? '-'} label={field.label} />),
+                        ...reportYears.map(year => <MetricValue key={`${field.id}-${year}`} value={valuesByYear[year] ?? '-'} label={field.label} />),
                         ...(showTotalColumn ? [<MetricValue key={`${field.id}-total`} value={total} label={field.label} />] : [])
                     ];
                 })
@@ -386,7 +387,7 @@ export default function RegionalReportPdfRenderer({
                             }
                             if (index === 0) return '30%';
                             if (showTotalColumn && index === headers.length - 1) return '22%';
-                            return `${Math.floor((showTotalColumn ? 48 : 70) / REPORT_YEARS.length)}%`;
+                            return `${Math.floor((showTotalColumn ? 48 : 70) / reportYears.length)}%`;
                         })}
                         variant="metrics"
                         financial={hasCurrencyValues}
