@@ -542,8 +542,9 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                             periodChunks.forEach((periods, periodChunkIndex) => {
                                 const showYearColumns = periods.length > 1 || (isMonthlyComparison && periods.length > 0);
                                 const totalHeader = periodChunks.length > 1 ? 'Total geral' : 'Total';
+                                const periodLabel = dataGroups.find(group => group.id === activeSectionGroupId)?.periodLabel?.trim() || 'Ano';
                                 const headers = showYearColumns
-                                    ? ['Indicador', ...periods.map(period => isMonthlyComparison ? formatMonthlyPeriod(period) : `Ano ${period}`), ...(showTotalColumn ? [totalHeader] : [])]
+                                    ? ['Indicador', ...periods.map(period => isMonthlyComparison ? formatMonthlyPeriod(period) : `${periodLabel} ${period}`), ...(showTotalColumn ? [totalHeader] : [])]
                                     : ['Indicador', 'Total'];
                                 const rows = yearlyRows.map<TableRow>(row => {
                                     const total = row.showTotal ? getMetricTotal(row.valuesByYear, blockYears, row.isCurrency) : '-';

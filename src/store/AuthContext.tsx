@@ -39,6 +39,8 @@ export interface DataGroup {
     reportLayout: DataGroupReportLayout;
     categoryTitle?: string | null;
     categoryOrder?: number;
+    /** Prefixo das colunas de ano no relatório (padrão "Ano"). */
+    periodLabel?: string | null;
 }
 
 export interface Field {
@@ -435,7 +437,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             ]);
 
             if (u.data) setUnits(u.data.map(d => ({ id: d.id, name: (d.full_name?.trim() || d.name), order_index: d.order_index ?? 999, unitType: d.unit_type ?? 'general_topic', description: d.description, regionName: d.region_name ?? null, regionalAscom: d.regional_ascom ?? null, responsibleSector: d.responsible_sector ?? null, responsibleSectorId: d.responsible_sector_id ?? null, responsibleUpdaterId: d.responsible_updater_id ?? null, reportCategoryTitle: d.report_category_title ?? null, reportCategoryOrder: d.report_category_order ?? 999, createdAt: d.created_at })));
-            if (dg.data) setDataGroups(dg.data.map(d => ({ id: d.id, unitId: d.unit_id, title: d.title, order: d.order_index, mode: d.mode as any, updateFrequency: d.update_frequency ?? 'fixed', showTotal: d.show_total ?? true, collectionLayout: d.collection_layout ?? 'narrative', reportLayout: d.report_layout ?? 'table', categoryTitle: d.category_title ?? null, categoryOrder: d.category_order ?? 999 })));
+            if (dg.data) setDataGroups(dg.data.map(d => ({ id: d.id, unitId: d.unit_id, title: d.title, order: d.order_index, mode: d.mode as any, updateFrequency: d.update_frequency ?? 'fixed', showTotal: d.show_total ?? true, collectionLayout: d.collection_layout ?? 'narrative', reportLayout: d.report_layout ?? 'table', categoryTitle: d.category_title ?? null, categoryOrder: d.category_order ?? 999, periodLabel: d.period_label ?? null })));
             if (f.data) setFields(f.data.map(d => ({ id: d.id, dataGroupId: d.data_group_id, name: d.name, type: d.type as FieldType, required: d.required, order: d.order_index, isActive: d.is_active, calculationConfig: d.calculation_config, enumOptions: Array.isArray(d.enum_options) ? d.enum_options.filter((option: unknown): option is string => typeof option === 'string' && option.trim().length > 0) : [] })));
             if (e.data) setEntries(e.data.map(d => ({ id: d.id, unitId: d.unit_id, dataGroupId: d.data_group_id, referenceYear: d.reference_year ?? null, referenceMonth: d.reference_month ?? null, updatedAt: d.updated_at, updatedBy: d.updated_by })));
             if (fv.data) setFieldValues(fv.data.map(d => ({ id: d.id, entryId: d.entry_id, fieldId: d.field_id, value: d.value, updatedAt: d.updated_at })));
@@ -560,7 +562,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     const addDataGroup = async (group: DataGroup) => {
-        const { error } = await supabase.from('data_groups').insert({ id: group.id, unit_id: group.unitId, title: group.title, order_index: group.order, mode: group.mode, update_frequency: group.updateFrequency, show_total: group.showTotal, collection_layout: group.collectionLayout, report_layout: group.reportLayout, category_title: group.categoryTitle ?? null, category_order: group.categoryOrder ?? 999 });
+        const { error } = await supabase.from('data_groups').insert({ id: group.id, unit_id: group.unitId, title: group.title, order_index: group.order, mode: group.mode, update_frequency: group.updateFrequency, show_total: group.showTotal, collection_layout: group.collectionLayout, report_layout: group.reportLayout, category_title: group.categoryTitle ?? null, category_order: group.categoryOrder ?? 999, period_label: group.periodLabel ?? null });
         if (error) {
             console.error("Erro ao adicionar DataGroup:", error);
             throw error;
@@ -578,6 +580,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (updates.showTotal !== undefined) payload.show_total = updates.showTotal;
         if (updates.collectionLayout !== undefined) payload.collection_layout = updates.collectionLayout;
         if (updates.reportLayout !== undefined) payload.report_layout = updates.reportLayout;
+        if (updates.periodLabel !== undefined) payload.period_label = updates.periodLabel;
         const { error } = await supabase.from('data_groups').update(payload).eq('id', id);
         if (error) {
             console.error("Erro ao atualizar DataGroup:", error);
