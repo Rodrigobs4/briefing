@@ -154,16 +154,19 @@ export const normalizeMetricBaseName = (value: string, yearToRemove?: string) =>
         ? value.replace(new RegExp(`\\b${yearToRemove}\\b`, 'g'), '')
         : value.replace(/\b(19|20)\d{2}\b/g, '');
 
+    // Mantém a acentuação: o resultado também é o rótulo exibido no relatório.
     return withoutYear
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/\b(ano|periodo|periodo de|competencia|exercicio|referente|ref)\b/gi, ' ')
+        .replace(/(?<![\p{L}\p{N}])(ano|per[ií]odo|compet[eê]ncia|exerc[ií]cio|referente|ref)(?![\p{L}\p{N}])/giu, ' ')
         .replace(/[()\-–—:|/]+/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
 };
 
-export const getMetricGroupKey = (value: string) => normalizeMetricBaseName(value).toLowerCase();
+// Chave de agrupamento sem acentos, para casar "Crianças" e "Criancas" na mesma linha.
+export const getMetricGroupKey = (value: string) => normalizeMetricBaseName(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
 
 export const getMetricLabelWithoutYear = (fieldName: string, fallback = 'Total') => {
     const normalized = normalizeMetricBaseName(fieldName);
