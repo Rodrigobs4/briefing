@@ -289,6 +289,10 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                     const latestUnitUpdateAuthor = latestUnitUpdate?.updatedBy
                         ? users.find(item => item.id === latestUnitUpdate.updatedBy)?.name || 'Responsável não identificado'
                         : 'Responsável não identificado';
+                    // Responsável cadastrado para o tópico, que pode ser diferente de quem atualizou por último.
+                    const unitResponsibleName = unit.responsibleUpdaterId
+                        ? users.find(item => item.id === unit.responsibleUpdaterId)?.name || 'Não identificado'
+                        : 'Não definido';
                     const getTableHighlights = (groupId?: string) =>
                         groupId ? (reportCategoryConfig?.tableHighlights ?? []).filter(rule => rule.groupId === groupId) : [];
                     const preserveOriginalMetrics = /graer|grupamento aéreo/i.test(unit.name);
@@ -624,8 +628,13 @@ export default function ReportPdfRenderer({ selectedUnits, selectedGroups, repor
                                 </div>
                                 <div className="report-unit-meta">
                                     {unit.responsibleSector && <span>Setor responsável: <strong>{unit.responsibleSector}</strong></span>}
-                                    <span>Última atualização: <strong>{latestUnitUpdateDate ? latestUnitUpdateDate.toLocaleString('pt-BR') : 'Sem registro'}</strong></span>
-                                    <span>Responsável pela atualização: <strong>{latestUnitUpdateAuthor}</strong></span>
+                                    <span>Responsável: <strong>{unitResponsibleName}</strong></span>
+                                </div>
+                                <div className="report-unit-meta">
+                                    <span>
+                                        Última atualização: <strong>{latestUnitUpdateDate ? latestUnitUpdateDate.toLocaleString('pt-BR') : 'Sem registro'}</strong>
+                                        {latestUnitUpdateDate && <> por <strong>{latestUnitUpdateAuthor}</strong></>}
+                                    </span>
                                 </div>
                             </div>
 
