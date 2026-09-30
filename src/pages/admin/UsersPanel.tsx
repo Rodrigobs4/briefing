@@ -149,10 +149,14 @@ export default function UsersPanel() {
                     regionalCommandIds: formRole === 'editor' ? formRegionalCommandIds : []
                 }
             });
-            if (error) throw new Error(error.message);
+            if (error) {
+                // A função responde 400 com { error } no corpo; exibe essa mensagem em vez da genérica.
+                const body = await (error as any).context?.json?.().catch(() => null);
+                throw new Error(body?.error || error.message);
+            }
             if (data?.error) throw new Error(data.error);
 
-            const newUserId = data?.userId as string | undefined;
+            const newUserId = (data?.userId ?? data?.user?.id) as string | undefined;
             if (!newUserId) throw new Error('Usuário criado, mas o ID não foi retornado.');
 
             await syncProfileRegionalCommands(
